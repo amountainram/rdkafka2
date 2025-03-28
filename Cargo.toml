@@ -1,0 +1,37 @@
+[package]
+name = "rdkafka2"
+version = "0.0.0"
+repository = "https://github.com/amountainram/rdkafka2"
+license = "MIT"
+keywords = ["kafka", "rdkafka"]
+description = "Rust wrapper for librdkafka"
+categories = ["api-bindings"]
+edition = "2024"
+rust-version = "1.85"
+include = ["/src", "LICENSE", "LICENSE-librdkafka", "NOTICE"]
+
+[dependencies]
+rdkafka2-sys = { path = "../rdkafka2-sys" }
+log = "0.4"
+tracing = { version = "0.1", optional = true }
+num_enum = "0.7"
+
+# These features are re-exports of the features that the rdkafka-sys crate
+# provides. See the rdkafka-sys documentation for details.
+[features]
+default = ["libz", "cmake-build"]
+tracing = ["dep:tracing"]
+cmake-build = ["rdkafka2-sys/cmake-build"]
+dynamic-linking = ["rdkafka2-sys/dynamic-linking"]
+ssl = ["rdkafka2-sys/ssl"]
+ssl-vendored = ["rdkafka2-sys/ssl-vendored"]
+gssapi = ["rdkafka2-sys/gssapi"]
+gssapi-vendored = ["rdkafka2-sys/gssapi-vendored"]
+sasl = ["rdkafka2-sys/gssapi"]
+libz = ["rdkafka2-sys/libz"]
+libz-static = ["rdkafka2-sys/libz-static"]
+curl = ["rdkafka2-sys/curl"]
+curl-static = ["rdkafka2-sys/curl-static"]
+zstd = ["rdkafka2-sys/zstd"]
+zstd-pkg-config = ["rdkafka2-sys/zstd-pkg-config"]
+external-lz4 = ["rdkafka2-sys/external-lz4"]
