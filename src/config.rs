@@ -3,14 +3,63 @@ use crate::{
     ptr::NativePtr,
     util::{ErrBuf, cstr_to_owned},
 };
+use once_cell::sync::Lazy;
 use rdkafka2_sys::{RDKafkaConf, RDKafkaConfErrorCode};
 use std::{
     borrow::Borrow,
-    collections::HashMap,
+    collections::{HashMap, hash_map::IntoIter},
     ffi::{CString, c_char},
     hash::Hash,
     ptr::null_mut,
 };
+
+struct DefaultNativeClientConfig {
+    ptr: NativePtr<RDKafkaConf>,
+}
+
+unsafe impl Send for DefaultNativeClientConfig {}
+
+unsafe impl Sync for DefaultNativeClientConfig {}
+
+static DEFAULT_RDKAFKA_CONFIG: Lazy<DefaultNativeClientConfig> = Lazy::new(|| unsafe {
+    DefaultNativeClientConfig {
+        ptr: NativePtr::from_ptr(rdkafka2_sys::rd_kafka_conf_new()),
+    }
+});
+
+fn get_conf_property(conf: *mut RDKafkaConf, key: &str) -> Result<String> {
+    let make_err = |res| KafkaError::ClientConfig(res, key.into());
+    let key_c = CString::new(key.to_string())?;
+
+    // Call with a `NULL` buffer to determine the size of the string.
+    let mut size = 0_usize;
+    let res =
+        unsafe { rdkafka2_sys::rd_kafka_conf_get(conf, key_c.as_ptr(), null_mut(), &mut size) };
+    if let Some(err) = RDKafkaConfErrorCode::from(res).error() {
+        return Err(make_err(*err));
+    }
+
+    // Allocate a buffer of that size and call again to get the actual
+    // string.
+    let mut buf = vec![0_u8; size];
+    let res = unsafe {
+        rdkafka2_sys::rd_kafka_conf_get(
+            conf,
+            key_c.as_ptr(),
+            buf.as_mut_ptr() as *mut c_char,
+            &mut size,
+        )
+    };
+    if let Some(err) = RDKafkaConfErrorCode::from(res).error() {
+        return Err(make_err(*err));
+    }
+
+    unsafe { Ok(cstr_to_owned(buf.as_ptr() as *const c_char)) }
+}
+
+pub(crate) fn get_conf_default_value(key: &str) -> Result<String> {
+    get_conf_property(DEFAULT_RDKAFKA_CONFIG.ptr.ptr(), key)
+}
 
 /// A native rdkafka-sys client config.
 pub struct NativeClientConfig {
@@ -29,46 +78,12 @@ impl NativeClientConfig {
         }
     }
 
-    /// Returns the pointer to the librdkafka RDKafkaConf structure.
     pub fn ptr(&self) -> *mut RDKafkaConf {
         self.ptr.ptr()
     }
 
-    /// Gets the value of a parameter in the configuration.
-    ///
-    /// This method reflects librdkafka's view of the current value of the
-    /// parameter. If the parameter was overridden by the user, it returns the
-    /// user-specified value. Otherwise, it returns librdkafka's default value
-    /// for the parameter.
     pub fn get(&self, key: &str) -> Result<String> {
-        let make_err = |res| KafkaError::ClientConfig(res, key.into());
-        let key_c = CString::new(key.to_string())?;
-
-        // Call with a `NULL` buffer to determine the size of the string.
-        let mut size = 0_usize;
-        let res = unsafe {
-            rdkafka2_sys::rd_kafka_conf_get(self.ptr(), key_c.as_ptr(), null_mut(), &mut size)
-        };
-        if let Some(err) = RDKafkaConfErrorCode::from(res).error() {
-            return Err(make_err(*err));
-        }
-
-        // Allocate a buffer of that size and call again to get the actual
-        // string.
-        let mut buf = vec![0_u8; size];
-        let res = unsafe {
-            rdkafka2_sys::rd_kafka_conf_get(
-                self.ptr(),
-                key_c.as_ptr(),
-                buf.as_mut_ptr() as *mut c_char,
-                &mut size,
-            )
-        };
-        if let Some(err) = RDKafkaConfErrorCode::from(res).error() {
-            return Err(make_err(*err));
-        }
-
-        unsafe { Ok(cstr_to_owned(buf.as_ptr() as *const c_char)) }
+        get_conf_property(self.ptr(), key)
     }
 
     pub(crate) fn set(&self, key: &str, value: &str) -> Result<()> {
@@ -89,58 +104,64 @@ impl NativeClientConfig {
         }
         Ok(())
     }
+
+    // Set internal opaque pointer to the context needed in callbacks
+    //pub(crate) unsafe fn enable_background_callback_triggering<C>(
+    //    &mut self,
+    //    //background_event_cb: fn(&NativeClient, &mut NativeEvent, &Arc<C>),
+    //    background_event_cb: unsafe extern "C" fn(*mut RDKafka, *mut RDKafkaEvent, *mut c_void),
+    //    opaque: &Arc<C>,
+    //) where
+    //    C: Sized,
+    //{
+    //    unsafe {
+    //        // C: Sized and this check should ensure that
+    //        // we are not passing a fat pointer here
+    //        assert_eq!(size_of::<*const C>(), size_of::<*const c_void>());
+    //        // Set a pointer to the application context
+    //        // that can be used by internal callbacks
+    //        rdkafka2_sys::rd_kafka_conf_set_opaque(self.ptr(), Arc::as_ptr(opaque) as *mut c_void);
+    //        rdkafka2_sys::rd_kafka_conf_set_background_event_cb(
+    //            self.ptr(),
+    //            Some(std::mem::transmute(background_event_cb)),
+    //        );
+    //    };
+    //}
 }
 
 /// Generic Kafka client configuration.
 #[derive(Clone, Debug)]
-pub struct ClientConfig<K, V> {
-    inner: HashMap<K, V>,
-    ///// The librdkafka logging level. Refer to [`RDKafkaLogLevel`] for the list
-    ///// of available levels.
-    //pub log_level: RDKafkaLogLevel,
+pub struct ClientConfig {
+    inner: HashMap<String, String>,
 }
 
-impl<K, V> ClientConfig<K, V> {
-    /// Gets the value of a parameter in the configuration.
-    ///
-    /// Returns the current value set for `key`, or `None` if no value for `key`
-    /// exists.
-    ///
-    /// Note that this method will only ever return values that were installed
-    /// by a call to [`ClientConfig::set`]. To retrieve librdkafka's default
-    /// value for a parameter, build a [`NativeClientConfig`] and then call
-    /// [`NativeClientConfig::get`] on the resulting object.
-    pub fn get<Q>(&self, k: &Q) -> Option<&V>
+impl ClientConfig {
+    pub fn get<Q>(&self, k: &Q) -> Option<&String>
     where
-        K: Eq + Hash + Borrow<Q>,
-        Q: Hash + Eq,
+        String: Eq + Hash + Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
     {
         self.inner.get(k)
     }
 
-    /// Sets a parameter in the configuration.
-    ///
-    /// If there is an existing value for `key` in the configuration, it is
-    /// overridden with the new `value`.
     pub fn set<Q, R>(&mut self, key: Q, value: R) -> &mut Self
     where
-        Q: Into<K>,
-        R: Into<V>,
-        K: Eq + Hash,
+        Q: Into<String>,
+        R: Into<String>,
     {
         self.inner.insert(key.into(), value.into());
         self
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &String)> {
+        self.inner.iter()
+    }
 }
 
-impl<K, V> TryFrom<ClientConfig<K, V>> for NativeClientConfig
-where
-    K: AsRef<str>,
-    V: AsRef<str>,
-{
+impl TryFrom<ClientConfig> for NativeClientConfig {
     type Error = KafkaError;
 
-    fn try_from(value: ClientConfig<K, V>) -> Result<Self> {
+    fn try_from(value: ClientConfig) -> Result<Self> {
         let ClientConfig { inner } = value;
         let conf = unsafe { NativeClientConfig::from_ptr(rdkafka2_sys::rd_kafka_conf_new()) };
         for (key, value) in inner.iter() {
@@ -150,37 +171,52 @@ where
     }
 }
 
-impl<K, V> Default for ClientConfig<K, V> {
+impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            inner: Default::default(),
+            inner: HashMap::with_capacity(0),
         }
     }
 }
 
-impl<K, V> FromIterator<(K, V)> for ClientConfig<K, V>
+impl<K, V> FromIterator<(K, V)> for ClientConfig
 where
-    K: Eq + Hash,
+    K: Into<String>,
+    V: Into<String>,
 {
-    fn from_iter<I>(iter: I) -> ClientConfig<K, V>
+    fn from_iter<I>(iter: I) -> ClientConfig
     where
         I: IntoIterator<Item = (K, V)>,
     {
         let mut config = ClientConfig::default();
-        config.inner.extend(iter);
+        config
+            .inner
+            .extend(iter.into_iter().map(|(k, v)| (k.into(), v.into())));
         config
     }
 }
 
-impl<K, V> Extend<(K, V)> for ClientConfig<K, V>
+impl<K, V> Extend<(K, V)> for ClientConfig
 where
-    K: Eq + Hash,
+    K: Into<String>,
+    V: Into<String>,
 {
     fn extend<I>(&mut self, iter: I)
     where
         I: IntoIterator<Item = (K, V)>,
     {
-        self.inner.extend(iter)
+        self.inner
+            .extend(iter.into_iter().map(|(k, v)| (k.into(), v.into())))
+    }
+}
+
+impl IntoIterator for ClientConfig {
+    type Item = (String, String);
+
+    type IntoIter = IntoIter<String, String>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.into_iter()
     }
 }
 

@@ -4,10 +4,10 @@
 //! [`log`]: https://docs.rs/log
 //! [`tracing`]: https://docs.rs/tracing
 
+use std::str;
+
 #[cfg(not(feature = "tracing"))]
-pub use log::Level::{Debug as DEBUG, Info as INFO, Warn as WARN};
-#[cfg(not(feature = "tracing"))]
-pub use log::{debug, error, info, log_enabled, trace, warn};
+pub use log::{debug, error, info, trace, warn};
 
 use num_enum::TryFromPrimitive;
 #[cfg(feature = "tracing")]
@@ -26,24 +26,39 @@ pub const WARN: tracing::Level = tracing::Level::WARN;
 pub enum RDKafkaSyslogLogLevel {
     /// Higher priority then [`Level::Error`](log::Level::Error) from the log
     /// crate.
-    Emerg = 0,
+    Emerg = libc::LOG_EMERG,
     /// Higher priority then [`Level::Error`](log::Level::Error) from the log
     /// crate.
-    Alert = 1,
+    Alert = libc::LOG_ALERT,
     /// Higher priority then [`Level::Error`](log::Level::Error) from the log
     /// crate.
-    Critical = 2,
+    Critical = libc::LOG_CRIT,
     /// Equivalent to [`Level::Error`](log::Level::Error) from the log crate.
-    Error = 3,
+    Error = libc::LOG_ERR,
     /// Equivalent to [`Level::Warn`](log::Level::Warn) from the log crate.
-    Warning = 4,
+    Warning = libc::LOG_WARNING,
     /// Higher priority then [`Level::Info`](log::Level::Info) from the log
     /// crate.
-    Notice = 5,
+    Notice = libc::LOG_NOTICE,
     /// Equivalent to [`Level::Info`](log::Level::Info) from the log crate.
-    Info = 6,
+    Info = libc::LOG_INFO,
     /// Equivalent to [`Level::Debug`](log::Level::Debug) from the log crate.
-    Debug = 7,
+    Debug = libc::LOG_DEBUG,
+}
+
+impl From<RDKafkaSyslogLogLevel> for &'static str {
+    fn from(value: RDKafkaSyslogLogLevel) -> Self {
+        match value {
+            RDKafkaSyslogLogLevel::Emerg => "0",
+            RDKafkaSyslogLogLevel::Alert => "1",
+            RDKafkaSyslogLogLevel::Critical => "2",
+            RDKafkaSyslogLogLevel::Error => "3",
+            RDKafkaSyslogLogLevel::Warning => "4",
+            RDKafkaSyslogLogLevel::Notice => "5",
+            RDKafkaSyslogLogLevel::Info => "6",
+            RDKafkaSyslogLogLevel::Debug => "7",
+        }
+    }
 }
 
 /// Log levels from [kafka spec](https://cwiki.apache.org/confluence/display/KAFKA/KIP-412%3A+Extend+Admin+API+to+support+dynamic+application+log+levels#KIP412:ExtendAdminAPItosupportdynamicapplicationloglevels-LogLevelDefinitions)
@@ -63,6 +78,72 @@ pub enum RDKafkaLogLevel {
     // FIXME: maybe remove
     #[allow(unused)]
     Trace,
+}
+
+impl From<RDKafkaLogLevel> for RDKafkaSyslogLogLevel {
+    fn from(value: RDKafkaLogLevel) -> Self {
+        match value {
+            RDKafkaLogLevel::Fatal => Self::Critical,
+            RDKafkaLogLevel::Error => Self::Error,
+            RDKafkaLogLevel::Warn => Self::Warning,
+            RDKafkaLogLevel::Info => Self::Info,
+            RDKafkaLogLevel::Debug => Self::Debug,
+            RDKafkaLogLevel::Trace => Self::Debug,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DebugContext {
+    Generic,
+    Broker,
+    Topic,
+    Metadata,
+    Feature,
+    Queue,
+    Msg,
+    Protocol,
+    Cgrp,
+    Security,
+    Fetch,
+    Interceptor,
+    Plugin,
+    Consumer,
+    Admin,
+    Eos,
+    Mock,
+    Assignor,
+    Conf,
+    Telemetry,
+    All,
+}
+
+impl From<DebugContext> for &'static str {
+    fn from(value: DebugContext) -> Self {
+        match value {
+            DebugContext::Generic => "generic",
+            DebugContext::Broker => "broker",
+            DebugContext::Topic => "topic",
+            DebugContext::Metadata => "metadata",
+            DebugContext::Feature => "feature",
+            DebugContext::Queue => "queue",
+            DebugContext::Msg => "msg",
+            DebugContext::Protocol => "protocol",
+            DebugContext::Cgrp => "cgrp",
+            DebugContext::Security => "security",
+            DebugContext::Fetch => "fetch",
+            DebugContext::Interceptor => "interceptor",
+            DebugContext::Plugin => "plugin",
+            DebugContext::Consumer => "consumer",
+            DebugContext::Admin => "admin",
+            DebugContext::Eos => "eos",
+            DebugContext::Mock => "mock",
+            DebugContext::Assignor => "assignor",
+            DebugContext::Conf => "conf",
+            DebugContext::Telemetry => "telemetry",
+            DebugContext::All => "all",
+        }
+    }
 }
 
 impl From<RDKafkaSyslogLogLevel> for RDKafkaLogLevel {

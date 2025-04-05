@@ -44,11 +44,11 @@ impl Display for ErrBuf {
 
 /// Returns a tuple representing the version of `librdkafka` in hexadecimal and
 /// string format.
-pub fn get_rdkafka_version() -> (i32, String) {
+pub fn rdkafka_version() -> (i32, String) {
     let version_number = unsafe { rdkafka2_sys::rd_kafka_version() };
-    let c_str = unsafe { CStr::from_ptr(rdkafka2_sys::rd_kafka_version_str()) };
+    let version = unsafe { cstr_to_owned(rdkafka2_sys::rd_kafka_version_str()) };
 
-    (version_number, c_str.to_string_lossy().into_owned())
+    (version_number, version)
 }
 
 /// Converts a C string into a [`String`].
@@ -61,5 +61,15 @@ pub(crate) unsafe fn cstr_to_owned(cstr: *const c_char) -> String {
         CStr::from_ptr(cstr as *const c_char)
             .to_string_lossy()
             .into_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version() {
+        assert_eq!(rdkafka_version(), (34078975, "2.8.0".into()));
     }
 }

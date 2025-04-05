@@ -10,14 +10,6 @@ edition = "2024"
 rust-version = "1.85"
 include = ["/src", "LICENSE", "LICENSE-librdkafka", "NOTICE"]
 
-[dependencies]
-rdkafka2-sys = { path = "../rdkafka2-sys" }
-log = "0.4"
-tracing = { version = "0.1", optional = true }
-num_enum = "0.7"
-
-# These features are re-exports of the features that the rdkafka-sys crate
-# provides. See the rdkafka-sys documentation for details.
 [features]
 default = ["libz", "cmake-build"]
 tracing = ["dep:tracing"]
@@ -35,3 +27,19 @@ curl-static = ["rdkafka2-sys/curl-static"]
 zstd = ["rdkafka2-sys/zstd"]
 zstd-pkg-config = ["rdkafka2-sys/zstd-pkg-config"]
 external-lz4 = ["rdkafka2-sys/external-lz4"]
+
+[dependencies]
+futures = { version = "0.3", default-features = false }
+libc = "0.2.171"
+log = "0.4"
+num_enum = "0.7"
+once_cell = "1.21.3"
+rdkafka2-sys = { path = "../rdkafka2-sys" }
+slab = "0.4"
+tracing = { version = "0.1", optional = true }
+typed-builder = "0.21"
+
+[dev-dependencies]
+env_logger = "0.11.8"
+rstest = "0.25.0"
+tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread", "time"] }

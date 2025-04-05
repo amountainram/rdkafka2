@@ -1,7 +1,7 @@
 use rdkafka2_sys::{RDKafkaConfErrorCode, RDKafkaErrorCode};
 use std::ffi::NulError;
 
-pub type Result<T> = std::prelude::v1::Result<T, KafkaError>;
+pub type Result<T, E = KafkaError> = std::prelude::v1::Result<T, E>;
 
 /// Represents all possible Kafka errors.
 ///
@@ -56,7 +56,7 @@ pub enum KafkaError {
     /// Offset store failed.
     StoreOffset(RDKafkaErrorCode),
     /// Subscription creation failed.
-    Subscription(String),
+    Subscription(RDKafkaErrorCode),
     /// Transaction error.
     // FIXME: figure out what to do with this
     //
