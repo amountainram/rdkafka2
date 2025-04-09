@@ -1,0 +1,17 @@
+{
+   rust_test_harness_leak
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:malloc
+   fun:_ZN3std6thread6Thread3new17hdbb763b882006a55E
+   fun:_ZN3std6thread7current12init_current17h974b97a106ef0eafE
+   fun:_ZN3std4sync4mpmc7context7Context3new17hd6095de85360abc4E
+   fun:_ZN3std3sys12thread_local6native4lazy20Storage$LT$T$C$D$GT$10initialize17hd4a47c85979d16b4E
+   fun:_ZN3std4sync4mpmc4list16Channel$LT$T$GT$4recv17h8f2dc8271df42f9bE
+   fun:_ZN4test7console17run_tests_console17h66d7631ce2a8b405E
+   fun:_ZN4test9test_main17hf3220c03cfb0aab4E
+   fun:_ZN4test16test_main_static17h2f392f537f23ba0dE
+   fun:_ZN8producer4main17h04b3a9179b137ab1E
+   fun:_ZN4core3ops8function6FnOnce9call_once17he0e98d98e1e673c2E
+   fun:_ZN3std3sys9backtrace28__rust_begin_short_backtrace17h8243b553dd370ea0E
+}

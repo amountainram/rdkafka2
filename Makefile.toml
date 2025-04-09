@@ -18,8 +18,18 @@ command = "docker"
 args = ["compose", "--file", "tests/docker-compose.yml", "down"]
 
 [tasks.e2e_tests]
-command = "cargo"
-args = ["test", "--test", "*"]
+script = '''
+    set -e
+    executables=$(cargo test --tests --no-run --message-format=json \
+        | jq -r 'select(.reason == "compiler-artifact" and .profile.test == true) | .executable' \
+        | grep -v null \
+        | grep -v '/rdkafka2-')
+
+    for exe in $executables; do
+        echo "Running Valgrind on $exe"
+        valgrind --leak-check=full --suppressions=tests/rust.supp --error-exitcode=1 "$exe"
+    done
+'''
 
 [tasks.e2e]
 dependencies = ["setup_tests"]

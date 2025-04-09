@@ -1,4 +1,5 @@
 use futures::{Stream, TryStreamExt};
+use rand::{Rng, distr::Alphanumeric};
 use rdkafka2::{
     KafkaError, RDKafkaLogLevel,
     client::ClientContext,
@@ -7,10 +8,23 @@ use rdkafka2::{
     producer::{Producer, ProducerContext},
 };
 use rdkafka2_sys::RDKafkaErrorCode;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 use std::env;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
+
+fn generate_random_string(len: usize) -> String {
+    rand::rng()
+        .sample_iter(&Alphanumeric)
+        .take(len)
+        .map(char::from)
+        .collect()
+}
+
+#[fixture]
+fn topic_name() -> String {
+    generate_random_string(10)
+}
 
 pub fn kafka_broker() -> &'static str {
     static LOCALHOST_BROKER: &str = "localhost:9092";
@@ -74,13 +88,13 @@ fn test_producer(
     ])
 )]
 #[tokio::test]
-async fn unknown_topic(#[case] config: ClientConfig) {
+async fn unknown_topic(#[case] config: ClientConfig, topic_name: String) {
     use rdkafka2::message::BaseRecord;
 
     let record = BaseRecord::builder()
         .key(r#"{"id":"1"}"#.as_bytes())
         .payload(r#"{"id":"2"}"#.as_bytes())
-        .topic("test-topic-1")
+        .topic(topic_name.as_str())
         .build();
     let (producer, delivery_stream) = test_producer(config);
     producer.send(record).expect("message to be produced");
@@ -95,6 +109,38 @@ async fn unknown_topic(#[case] config: ClientConfig) {
             RDKafkaErrorCode::UnknownTopicOrPartition
         ))
     );
+
+    drop(producer);
+}
+
+#[rstest]
+#[case(
+    ClientConfig::from_iter([
+        ("bootstrap.servers", kafka_broker()),
+        ("log_level", "7"),
+        ("debug", "all"),
+    ])
+)]
+#[tokio::test]
+async fn simple_producer(#[case] config: ClientConfig, topic_name: String) {
+    use rdkafka2::message::BaseRecord;
+
+    let record = BaseRecord::builder()
+        .key(r#"{"id":"1"}"#.as_bytes())
+        .payload(r#"{"id":"2"}"#.as_bytes())
+        .topic(topic_name.as_str())
+        .build();
+    let (producer, delivery_stream) = test_producer(config);
+    producer.send(record).expect("message to be produced");
+
+    let produced = delivery_stream
+        .map_ok(|_| ())
+        .take(1)
+        .try_collect::<Vec<()>>()
+        .await
+        .map_err(|(err, ..)| err);
+    assert!(produced.is_ok());
+    assert_eq!(produced.unwrap().len(), 1);
 
     drop(producer);
 }
