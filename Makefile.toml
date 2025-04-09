@@ -1,0 +1,28 @@
+[tasks.run_services]
+command = "docker"
+args = [
+    "compose",
+    "--file",
+    "tests/docker-compose.yml",
+    "up",
+    "--wait",
+    "-d",
+    "kafka",
+]
+
+[tasks.setup_tests]
+run_task = "run_services"
+
+[tasks.teardown_tests]
+command = "docker"
+args = ["compose", "--file", "tests/docker-compose.yml", "down"]
+
+[tasks.e2e_tests]
+command = "cargo"
+args = ["test", "--test", "*"]
+
+[tasks.e2e]
+dependencies = ["setup_tests"]
+run_task = { name = [
+    "e2e_tests",
+], fork = true, cleanup_task = "teardown_tests" }

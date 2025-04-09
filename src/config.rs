@@ -10,21 +10,21 @@ use std::{
     collections::{HashMap, hash_map::IntoIter},
     ffi::{CString, c_char},
     hash::Hash,
+    pin::Pin,
     ptr::null_mut,
 };
 
-struct DefaultNativeClientConfig {
-    ptr: NativePtr<RDKafkaConf>,
-}
+#[repr(transparent)]
+struct DefaultNativeClientConfig(NativePtr<RDKafkaConf>);
 
 unsafe impl Send for DefaultNativeClientConfig {}
 
 unsafe impl Sync for DefaultNativeClientConfig {}
 
-static DEFAULT_RDKAFKA_CONFIG: Lazy<DefaultNativeClientConfig> = Lazy::new(|| unsafe {
-    DefaultNativeClientConfig {
-        ptr: NativePtr::from_ptr(rdkafka2_sys::rd_kafka_conf_new()),
-    }
+static DEFAULT_RDKAFKA_CONFIG: Lazy<Pin<Box<DefaultNativeClientConfig>>> = Lazy::new(|| unsafe {
+    Box::pin(DefaultNativeClientConfig(NativePtr::from_ptr(
+        rdkafka2_sys::rd_kafka_conf_new(),
+    )))
 });
 
 fn get_conf_property(conf: *mut RDKafkaConf, key: &str) -> Result<String> {
@@ -58,7 +58,7 @@ fn get_conf_property(conf: *mut RDKafkaConf, key: &str) -> Result<String> {
 }
 
 pub(crate) fn get_conf_default_value(key: &str) -> Result<String> {
-    get_conf_property(DEFAULT_RDKAFKA_CONFIG.ptr.ptr(), key)
+    get_conf_property(DEFAULT_RDKAFKA_CONFIG.0.ptr(), key)
 }
 
 /// A native rdkafka-sys client config.

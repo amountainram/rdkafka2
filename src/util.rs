@@ -1,7 +1,11 @@
 use std::{
-    ffi::{CStr, c_char},
+    ffi::{CStr, c_char, c_void},
     fmt::{self, Display},
+    slice,
+    time::Duration,
 };
+
+use futures::FutureExt;
 
 pub(crate) struct ErrBuf {
     buf: [u8; ErrBuf::MAX_ERR_LEN],
@@ -42,15 +46,6 @@ impl Display for ErrBuf {
     }
 }
 
-/// Returns a tuple representing the version of `librdkafka` in hexadecimal and
-/// string format.
-pub fn rdkafka_version() -> (i32, String) {
-    let version_number = unsafe { rdkafka2_sys::rd_kafka_version() };
-    let version = unsafe { cstr_to_owned(rdkafka2_sys::rd_kafka_version_str()) };
-
-    (version_number, version)
-}
-
 /// Converts a C string into a [`String`].
 ///
 /// # Safety
@@ -61,6 +56,79 @@ pub(crate) unsafe fn cstr_to_owned(cstr: *const c_char) -> String {
         CStr::from_ptr(cstr as *const c_char)
             .to_string_lossy()
             .into_owned()
+    }
+}
+
+/// Converts a pointer to an array to an optional slice. If the pointer is null,
+/// returns `None`.
+pub(crate) unsafe fn ptr_to_opt_slice<'a, T>(ptr: *const c_void, size: usize) -> Option<&'a [T]> {
+    if ptr.is_null() {
+        None
+    } else {
+        unsafe { Some(slice::from_raw_parts::<T>(ptr as *const T, size)) }
+    }
+}
+
+/// Returns a tuple representing the version of `librdkafka` in hexadecimal and
+/// string format.
+pub fn rdkafka_version() -> (i32, String) {
+    let version_number = unsafe { rdkafka2_sys::rd_kafka_version() };
+    let version = unsafe { cstr_to_owned(rdkafka2_sys::rd_kafka_version_str()) };
+
+    (version_number, version)
+}
+
+pub trait Shutdown {
+    fn subscribe(&self) -> impl Future<Output = ()> + Send + 'static;
+}
+
+impl<T> Shutdown for futures::future::Pending<T>
+where
+    T: Send + 'static,
+{
+    fn subscribe(&self) -> impl Future<Output = ()> + Send + 'static {
+        self.clone().map(|_| ())
+    }
+}
+
+#[cfg(feature = "tokio")]
+impl Shutdown for tokio::sync::broadcast::Sender<()> {
+    fn subscribe(&self) -> impl Future<Output = ()> + Send + 'static {
+        let mut rx = self.subscribe();
+        async move {
+            let _ = rx.recv().await;
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum Timeout {
+    /// Time out after the specified duration elapses.
+    After(Duration),
+    /// Time out after the specified duration elapses.
+    NonBlock,
+    /// Block forever.
+    Never,
+}
+
+impl Timeout {
+    /// Converts a timeout to Kafka's expected representation.
+    pub(crate) fn as_millis(&self) -> i32 {
+        match self {
+            Timeout::After(d) => d.as_millis() as i32,
+            Timeout::NonBlock => 0,
+            Timeout::Never => -1,
+        }
+    }
+}
+
+impl From<Duration> for Timeout {
+    fn from(value: Duration) -> Self {
+        if value.is_zero() {
+            Timeout::NonBlock
+        } else {
+            Timeout::After(value)
+        }
     }
 }
 

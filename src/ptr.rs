@@ -22,6 +22,19 @@ unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaConf {
     const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_conf_destroy;
 }
 
+unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaHeaders {
+    const TYPE: &'static str = "rd_kafka_headers_t";
+    const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_headers_destroy;
+}
+
+unsafe extern "C" fn no_op(_: *mut rdkafka2_sys::RDKafkaMessage) {}
+
+unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaMessage {
+    const TYPE: &'static str = "rd_kafka_message_t";
+    const DROP: unsafe extern "C" fn(*mut Self) = no_op;
+}
+
+#[derive(Debug, Clone)]
 #[repr(transparent)]
 pub(crate) struct NativePtr<T>
 where

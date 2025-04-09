@@ -1,11 +1,7 @@
-use super::{ClientContext, NativeClient};
-use crate::{
-    KafkaError,
-    config::{ClientConfig, NativeClientConfig},
-    error::Result,
-    log::RDKafkaLogLevel,
+use super::{
+    ClientConfig, ClientContext, KafkaError, NativeClient, NativeClientConfig, RDKafkaLogLevel,
+    RDKafkaType, Result,
 };
-use rdkafka2_sys::RDKafkaType;
 use std::{marker::PhantomData, sync::Arc};
 use typed_builder::Optional;
 
@@ -17,11 +13,6 @@ pub struct NativeClientBuilder<C, F = ((), (), (), (), ())> {
 }
 
 impl<C> NativeClient<C> {
-    /**
-    Create a builder for building `NativeClientBuilder`.
-    On the builder, call `.rd_type(...)`(optional), `.config(...)`(optional), `.native_config(...)`, `.context(...)`, `.log_level(...)` to set the values of the fields.
-    Finally, call `.build()` to create the instance of `NativeClientBuilder`.
-    */
     #[allow(dead_code)]
     pub fn builder() -> NativeClientBuilder<C, ((), (), (), (), ())> {
         NativeClientBuilder {

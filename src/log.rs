@@ -11,13 +11,7 @@ pub use log::{debug, error, info, trace, warn};
 
 use num_enum::TryFromPrimitive;
 #[cfg(feature = "tracing")]
-pub use tracing::{debug, enabled as log_enabled, error, info, trace, warn};
-#[cfg(feature = "tracing")]
-pub const DEBUG: tracing::Level = tracing::Level::DEBUG;
-#[cfg(feature = "tracing")]
-pub const INFO: tracing::Level = tracing::Level::INFO;
-#[cfg(feature = "tracing")]
-pub const WARN: tracing::Level = tracing::Level::WARN;
+pub use tracing::{debug, error, info, trace, warn};
 
 /// Syslog [log levels](https://en.wikipedia.org/wiki/Syslog#Severity_level)
 /// The log levels supported by librdkafka.

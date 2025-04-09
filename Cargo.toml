@@ -11,7 +11,8 @@ rust-version = "1.85"
 include = ["/src", "LICENSE", "LICENSE-librdkafka", "NOTICE"]
 
 [features]
-default = ["libz", "cmake-build"]
+default = ["libz", "cmake-build", "tokio"]
+tokio = ["dep:tokio"]
 tracing = ["dep:tracing"]
 cmake-build = ["rdkafka2-sys/cmake-build"]
 dynamic-linking = ["rdkafka2-sys/dynamic-linking"]
@@ -29,17 +30,24 @@ zstd-pkg-config = ["rdkafka2-sys/zstd-pkg-config"]
 external-lz4 = ["rdkafka2-sys/external-lz4"]
 
 [dependencies]
-futures = { version = "0.3", default-features = false }
-libc = "0.2.171"
+futures = "0.3"
+libc = "0.2"
 log = "0.4"
 num_enum = "0.7"
-once_cell = "1.21.3"
+once_cell = "1"
 rdkafka2-sys = { path = "../rdkafka2-sys" }
 slab = "0.4"
+tokio = { version = "1", optional = true, features = [
+    "macros",
+    "rt",
+    "sync",
+    "time",
+] }
 tracing = { version = "0.1", optional = true }
 typed-builder = "0.21"
 
 [dev-dependencies]
 env_logger = "0.11.8"
 rstest = "0.25.0"
-tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread", "time"] }
+tokio-stream = "0.1.17"

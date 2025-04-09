@@ -3,11 +3,10 @@ use crate::{
     error::{KafkaError, Result},
     log::{RDKafkaLogLevel, RDKafkaSyslogLogLevel, debug, error, info, trace, warn},
     ptr::NativePtr,
-    time::Timeout,
-    util::{ErrBuf, cstr_to_owned},
+    util::{ErrBuf, Timeout, cstr_to_owned},
 };
 pub use builder::*;
-use rdkafka2_sys::{RDKafka, RDKafkaType};
+use rdkafka2_sys::{RDKafka, RDKafkaErrorCode, RDKafkaType};
 use std::{
     borrow::Borrow,
     ffi::{c_char, c_int},
@@ -18,7 +17,7 @@ use std::{
 
 mod builder;
 
-pub trait ClientContext: Send + Sync {
+pub trait ClientContext {
     /// Callback to log messages from librdkafka
     ///
     /// # Safety
@@ -78,11 +77,23 @@ impl ClientContext for DefaultClientContext {}
 /// Any API, short of the destructor functions, may be called at any time from any thread.
 /// The common restrictions of object destruction still applies
 /// (e.g., you must not call `rd_kafka_destroy()` while another thread is calling `rd_kafka_poll()` or similar).
+#[derive(Debug)]
 pub struct NativeClient<C = DefaultClientContext> {
     rd_type: RDKafkaType,
-    inner: NativePtr<RDKafka>,
+    inner: Arc<NativePtr<RDKafka>>,
     config: Arc<ClientConfig>,
     context: Arc<C>,
+}
+
+impl<C> Clone for NativeClient<C> {
+    fn clone(&self) -> Self {
+        Self {
+            rd_type: self.rd_type,
+            inner: self.inner.clone(),
+            config: self.config.clone(),
+            context: self.context.clone(),
+        }
+    }
 }
 
 /// # Safety
@@ -135,7 +146,9 @@ where
         };
 
         if client_ptr.is_null() {
-            // SAFETY: Documentation of librdkafka states that if rd_kafka_new
+            // # Safety
+            //
+            // Documentation of librdkafka states that if rd_kafka_new
             // fails returning NULL it also DOES NOT take ownership of
             // the configuration
             unsafe {
@@ -147,7 +160,7 @@ where
         unsafe {
             Ok(NativeClient {
                 rd_type,
-                inner: NativePtr::from_ptr(client_ptr),
+                inner: NativePtr::from_ptr(client_ptr).into(),
                 config: config.into(),
                 context,
             })
@@ -177,13 +190,29 @@ impl<C> NativeClient<C> {
         self.context.as_ref()
     }
 
-    pub fn poll<T>(&self, timeout: T)
+    pub fn native_ptr(&self) -> *mut RDKafka {
+        self.inner.ptr()
+    }
+
+    pub fn poll<T>(&self, timeout: T) -> u64
     where
         T: Into<Timeout>,
     {
-        unsafe {
-            rdkafka2_sys::rd_kafka_poll(self.inner.ptr(), timeout.into().as_millis());
-        }
+        unsafe { rdkafka2_sys::rd_kafka_poll(self.inner.ptr(), timeout.into().as_millis()) as u64 }
+    }
+
+    pub fn flush<T>(&self, timeout: T) -> RDKafkaErrorCode
+    where
+        T: Into<Timeout>,
+    {
+        unsafe { rdkafka2_sys::rd_kafka_flush(self.inner.ptr(), timeout.into().as_millis()).into() }
+    }
+
+    pub fn purge<T>(&self, timeout: T) -> RDKafkaErrorCode
+    where
+        T: Into<Timeout>,
+    {
+        unsafe { rdkafka2_sys::rd_kafka_purge(self.inner.ptr(), timeout.into().as_millis()).into() }
     }
 }
 
