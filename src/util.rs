@@ -1,11 +1,10 @@
+use futures::FutureExt;
 use std::{
     ffi::{CStr, c_char, c_void},
     fmt::{self, Display},
     slice,
     time::Duration,
 };
-
-use futures::FutureExt;
 
 pub(crate) struct ErrBuf {
     buf: [u8; ErrBuf::MAX_ERR_LEN],
@@ -16,7 +15,7 @@ impl ErrBuf {
 
     pub fn new() -> ErrBuf {
         ErrBuf {
-            buf: [0; ErrBuf::MAX_ERR_LEN],
+            buf: [0; Self::MAX_ERR_LEN],
         }
     }
 
@@ -24,17 +23,21 @@ impl ErrBuf {
         self.buf.as_mut_ptr() as *mut c_char
     }
 
-    //pub fn filled(&self) -> &[u8] {
-    //    let i = self.buf.iter().position(|c| *c == 0).unwrap();
-    //    &self.buf[..i + 1]
-    //}
-    //
-    //pub fn len(&self) -> usize {
-    //    self.filled().len()
-    //}
+    pub fn filled(&self) -> &[u8] {
+        let i = self.buf.iter().position(|c| *c == 0).unwrap();
+        &self.buf[..i + 1]
+    }
+
+    pub fn len(&self) -> usize {
+        self.filled().len()
+    }
 
     pub fn capacity(&self) -> usize {
         self.buf.len()
+    }
+
+    pub fn clear(&mut self) {
+        self.buf = [0; Self::MAX_ERR_LEN];
     }
 }
 

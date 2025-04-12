@@ -1,5 +1,5 @@
 {
-   rust_test_harness_leak
+   producer
    Memcheck:Leak
    match-leak-kinds: possible
    fun:malloc
@@ -11,7 +11,7 @@
    fun:_ZN4test7console17run_tests_console17h66d7631ce2a8b405E
    fun:_ZN4test9test_main17hf3220c03cfb0aab4E
    fun:_ZN4test16test_main_static17h2f392f537f23ba0dE
-   fun:_ZN8producer4main17h04b3a9179b137ab1E
-   fun:_ZN4core3ops8function6FnOnce9call_once17he0e98d98e1e673c2E
-   fun:_ZN3std3sys9backtrace28__rust_begin_short_backtrace17h8243b553dd370ea0E
+   fun:_ZN8producer4main17hdb6a975de86ea20cE
+   fun:_ZN4core3ops8function6FnOnce9call_once17hadc3718ee44e508bE
+   fun:_ZN3std3sys9backtrace28__rust_begin_short_backtrace17h134128b291cf7c76E
 }

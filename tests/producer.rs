@@ -26,7 +26,7 @@ fn topic_name() -> String {
     generate_random_string(10)
 }
 
-pub fn kafka_broker() -> &'static str {
+fn kafka_broker() -> &'static str {
     static LOCALHOST_BROKER: &str = "localhost:9092";
     static DEFAULT_CI_DOCKER_BROKER: &str = "docker:9092";
 

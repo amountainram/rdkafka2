@@ -12,7 +12,7 @@ include = ["/src", "LICENSE", "LICENSE-librdkafka", "NOTICE"]
 
 [features]
 default = ["libz", "cmake-build", "tokio"]
-tokio = ["dep:tokio"]
+tokio = ["tokio/macros", "tokio/rt", "dep:tokio-stream"]
 tracing = ["dep:tracing"]
 cmake-build = ["rdkafka2-sys/cmake-build"]
 dynamic-linking = ["rdkafka2-sys/dynamic-linking"]
@@ -37,12 +37,8 @@ num_enum = "0.7"
 once_cell = "1"
 rdkafka2-sys = { path = "../rdkafka2-sys" }
 slab = "0.4"
-tokio = { version = "1", optional = true, features = [
-    "macros",
-    "rt",
-    "sync",
-    "time",
-] }
+tokio = { version = "1", features = ["sync", "time"] }
+tokio-stream = { version = "0.1", optional = true }
 tracing = { version = "0.1", optional = true }
 typed-builder = "0.21"
 

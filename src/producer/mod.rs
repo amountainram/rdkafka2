@@ -1,9 +1,13 @@
+use std::time::Duration;
+
 use crate::{IntoOpaque, client::ClientContext, message::DeliveryResult};
 pub use boxed::Producer;
 pub use builder::ProducerBuilder;
 
 mod boxed;
 mod builder;
+
+pub static DEFAULT_PRODUCER_POLL_INTERVAL_MS: u64 = 100;
 
 /// Trait allowing to customize the partitioning of messages.
 pub trait Partitioner {
@@ -43,6 +47,10 @@ pub trait ProducerContext<P = NoCustomPartitioner>: ClientContext {
     /// the producer when producing a message, and returned to the `delivery`
     /// method once the message has been delivered, or failed to.
     type DeliveryOpaque: IntoOpaque + Default;
+
+    fn poll_interval() -> Duration {
+        Duration::from_millis(DEFAULT_PRODUCER_POLL_INTERVAL_MS)
+    }
 
     fn delivery_message_callback(&self, msg: DeliveryResult<'_>, opaque: Self::DeliveryOpaque);
 

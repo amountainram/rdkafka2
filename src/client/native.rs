@@ -7,8 +7,20 @@ use crate::{
     ptr::NativePtr,
     util::ErrBuf,
 };
-use rdkafka2_sys::{RDKafka, RDKafkaErrorCode, RDKafkaType};
-use std::{borrow::Borrow, hash::Hash, mem::ManuallyDrop, sync::Arc};
+use rdkafka2_sys::{RDKafka, RDKafkaErrorCode, RDKafkaTopic, RDKafkaType};
+use std::{borrow::Borrow, ffi::CString, hash::Hash, mem::ManuallyDrop, sync::Arc};
+
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct Topic(NativePtr<RDKafkaTopic>);
+
+unsafe impl Send for Topic {}
+
+impl Topic {
+    pub fn ptr(&self) -> *mut RDKafkaTopic {
+        self.0.ptr()
+    }
+}
 
 /// Wrapper of the native rdkafka2-sys client.
 /// Librdkafka is completely thread-safe (unless otherwise noted in the API documentation).
@@ -151,5 +163,18 @@ impl<C> NativeClient<C> {
         T: Into<Timeout>,
     {
         unsafe { rdkafka2_sys::rd_kafka_purge(self.inner.ptr(), timeout.into().as_millis()).into() }
+    }
+
+    pub fn topic_from_name(&self, name: &str) -> Result<Topic> {
+        let topic = CString::new(name).map_err(KafkaError::Nul)?;
+        let topic_ptr = unsafe {
+            NativePtr::from_ptr(rdkafka2_sys::rd_kafka_topic_new(
+                self.native_ptr(),
+                topic.as_ptr(),
+                std::ptr::null_mut(),
+            ))
+        };
+
+        Ok(Topic(topic_ptr))
     }
 }

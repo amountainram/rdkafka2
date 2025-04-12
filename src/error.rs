@@ -1,4 +1,4 @@
-use rdkafka2_sys::{RDKafkaConfErrorCode, RDKafkaErrorCode};
+use rdkafka2_sys::{RDKafkaConfErrorCode, RDKafkaErrorCode, RDKafkaEventType};
 use std::ffi::NulError;
 
 pub type Result<T, E = KafkaError> = std::prelude::v1::Result<T, E>;
@@ -13,6 +13,8 @@ pub enum KafkaError {
     AdminOpCreation(String),
     /// The admin operation itself failed.
     AdminOp(RDKafkaErrorCode),
+    /// Api operation could not be received in the listening queue
+    AdminApiError,
     /// The client was dropped before the operation completed.
     Canceled,
     /// Invalid client configuration.
@@ -63,6 +65,12 @@ pub enum KafkaError {
     //Transaction(RDKafkaError),
     /// Mock Cluster error
     MockCluster(RDKafkaErrorCode),
+
+    UnknownEvent(i32),
+    InvalidEvent {
+        actual: RDKafkaEventType,
+        expected: RDKafkaEventType,
+    },
 }
 
 impl From<NulError> for KafkaError {

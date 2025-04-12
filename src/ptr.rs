@@ -34,6 +34,42 @@ unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaMessage {
     const DROP: unsafe extern "C" fn(*mut Self) = no_op;
 }
 
+unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaEvent {
+    const TYPE: &'static str = "rd_kafka_event_t";
+    const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_event_destroy;
+}
+
+unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaQueue {
+    const TYPE: &'static str = "queue";
+    const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_queue_destroy;
+}
+
+unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaAdminOptions {
+    const TYPE: &'static str = "rd_kafka_AdminOptions_t";
+    const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_AdminOptions_destroy;
+}
+
+unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaNewTopic {
+    const TYPE: &'static str = "rd_kafka_NewTopic_t";
+    const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_NewTopic_destroy;
+}
+
+unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaTopic {
+    const TYPE: &'static str = "rd_kafka_topic_t";
+    const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_topic_destroy;
+}
+
+unsafe extern "C" fn rd_kafka_metadata_destroy(ptr: *mut rdkafka2_sys::RDKafkaMetadata) {
+    unsafe {
+        rdkafka2_sys::rd_kafka_metadata_destroy(ptr as *const _);
+    }
+}
+
+unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaMetadata {
+    const TYPE: &'static str = "rd_kafka_metadata_t";
+    const DROP: unsafe extern "C" fn(*mut Self) = rd_kafka_metadata_destroy;
+}
+
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub(crate) struct NativePtr<T>

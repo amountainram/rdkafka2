@@ -25,9 +25,12 @@ script = '''
         | grep -v null \
         | grep -v '/rdkafka2-')
 
+    valgrind_args="--leak-check=full --error-exitcode=1"
+
     for exe in $executables; do
-        echo "Running Valgrind on $exe"
-        valgrind --leak-check=full --suppressions=tests/rust.supp --error-exitcode=1 "$exe"
+        echo "Running Valgrind on $exe with params $valgrind_args"
+        test_name=$(basename "$exe" | sed -r 's/-([^-]+)$//')
+        valgrind $valgrind_args --suppressions=tests/suppressions/${test_name}.supp "$exe"
     done
 '''
 
@@ -35,4 +38,30 @@ script = '''
 dependencies = ["setup_tests"]
 run_task = { name = [
     "e2e_tests",
+], fork = true, cleanup_task = "teardown_tests" }
+
+#------------- VALGRIND UPDATE --------------#
+
+[tasks.e2e_tests_update]
+script = '''
+    set -e
+    executables=$(cargo test --tests --no-run --message-format=json \
+        | jq -r 'select(.reason == "compiler-artifact" and .profile.test == true) | .executable' \
+        | grep -v null \
+        | grep -v '/rdkafka2-')
+
+    valgrind_args="--leak-check=full --gen-suppressions=all"
+
+    for exe in $executables; do
+        echo "Running Valgrind on $exe with params $valgrind_args"
+        test_name=$(basename "$exe" | sed -r 's/-([^-]+)$//');
+        valgrind $valgrind_args --log-file=/tmp/${test_name}.valgrind.log "$exe";
+        cat /tmp/${test_name}.valgrind.log | sed -e "s/<insert_a_suppression_name_here>/${test_name}/" | ./tests/suppressions.sh > ./tests/suppressions/${test_name}.supp
+    done
+'''
+
+[tasks.e2e_update]
+dependencies = ["setup_tests"]
+run_task = { name = [
+    "e2e_tests_update",
 ], fork = true, cleanup_task = "teardown_tests" }

@@ -2,9 +2,9 @@ use crate::{
     log::{debug, error, info, trace, warn},
     util::cstr_to_owned,
 };
-pub use admin::AdminClient;
+pub use admin::*;
 pub use builders::*;
-pub use native::NativeClient;
+pub use native::{NativeClient, Topic};
 use std::ffi::{c_char, c_int};
 
 mod admin;

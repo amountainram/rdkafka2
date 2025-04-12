@@ -9,10 +9,7 @@ use crate::{
     ptr::IntoOpaque,
     util::Timeout,
 };
-use rdkafka2_sys::{
-    RDKafkaErrorCode, RDKafkaMessage, RDKafkaType, rd_kafka_conf_set_dr_msg_cb,
-    rd_kafka_conf_set_opaque, rd_kafka_message_t, rd_kafka_t,
-};
+use rdkafka2_sys::{RDKafka, RDKafkaErrorCode, RDKafkaMessage, RDKafkaType};
 use std::{
     ffi::{CString, c_void},
     pin::Pin,
@@ -57,12 +54,30 @@ pub struct Producer<C = DefaultProducerContext> {
     _ptr: Arc<Pin<Box<*mut ProducerClient<C>>>>,
 }
 
-impl<C> Clone for Producer<C> {
-    fn clone(&self) -> Self {
-        Self {
-            producer: self.producer.clone(),
-            _ptr: self._ptr.clone(),
-        }
+impl<C> Producer<C> {
+    pub fn poll<T>(&self, timeout: T) -> u64
+    where
+        T: Into<Timeout>,
+    {
+        self.producer.client.poll(timeout)
+    }
+
+    pub fn flush<T>(&self, timeout: T) -> RDKafkaErrorCode
+    where
+        T: Into<Timeout>,
+    {
+        self.producer.client.flush(timeout)
+    }
+
+    pub fn purge<T>(&self, timeout: T) -> RDKafkaErrorCode
+    where
+        T: Into<Timeout>,
+    {
+        self.producer.client.purge(timeout)
+    }
+
+    pub fn context(&self) -> &C {
+        self.producer.client.context()
     }
 }
 
@@ -71,8 +86,8 @@ where
     C: ProducerContext,
 {
     unsafe extern "C" fn dr_msg_cb(
-        _rk: *mut rd_kafka_t,
-        rkmessage: *const rd_kafka_message_t,
+        _rk: *mut RDKafka,
+        rkmessage: *const RDKafkaMessage,
         opaque: *mut c_void,
     ) {
         let producer = unsafe { &**(opaque as *mut *mut ProducerClient<C>) };
@@ -142,27 +157,6 @@ where
         self.produce(record)?;
         Ok(self.poll(Timeout::NonBlock))
     }
-
-    pub fn poll<T>(&self, timeout: T) -> u64
-    where
-        T: Into<Timeout>,
-    {
-        self.producer.client.poll(timeout)
-    }
-
-    pub fn flush<T>(&self, timeout: T) -> RDKafkaErrorCode
-    where
-        T: Into<Timeout>,
-    {
-        self.producer.client.flush(timeout)
-    }
-
-    pub fn purge<T>(&self, timeout: T) -> RDKafkaErrorCode
-    where
-        T: Into<Timeout>,
-    {
-        self.producer.client.purge(timeout)
-    }
 }
 
 impl<C> Producer<C>
@@ -177,6 +171,7 @@ where
     ) -> Result<Self>
     where
         S: Future + Send + 'static,
+        S::Output: Send,
     {
         let native_config = NativeClientConfig::try_from(config.clone())?;
         // This allocates a pointer onto the heap (8 bytes).
@@ -190,8 +185,11 @@ where
 
         unsafe {
             // extern "C" copies the value of the [`delivery_opaque_ptr`]
-            rd_kafka_conf_set_opaque(native_config.ptr(), delivery_opaque_ptr as *mut c_void);
-            rd_kafka_conf_set_dr_msg_cb(native_config.ptr(), Some(Self::dr_msg_cb));
+            rdkafka2_sys::rd_kafka_conf_set_opaque(
+                native_config.ptr(),
+                delivery_opaque_ptr as *mut c_void,
+            );
+            rdkafka2_sys::rd_kafka_conf_set_dr_msg_cb(native_config.ptr(), Some(Self::dr_msg_cb));
         }
 
         let native_client = NativeClient::builder()
@@ -204,24 +202,20 @@ where
 
         #[cfg(feature = "tokio")]
         let poll_handle = {
-            use std::time::Duration;
+            use futures::StreamExt;
+            use tokio::{spawn, time::interval};
+            use tokio_stream::wrappers::IntervalStream;
 
+            let poll_interval = C::poll_interval();
             let native_client = native_client.clone();
-            tokio::spawn(async move {
-                tokio::pin!(shutdown);
-
-                let mut clock = tokio::time::interval(Duration::from_millis(100));
-                loop {
-                    tokio::select! {
-                        _ = clock.tick() => {
-                            native_client.poll(Timeout::NonBlock);
-                        }
-                        _ = &mut shutdown => {
-                            break;
-                        }
-                    }
-                }
-            })
+            spawn(
+                IntervalStream::new(interval(poll_interval))
+                    .take_until(shutdown)
+                    .map(move |_| {
+                        native_client.poll(Timeout::NonBlock);
+                    })
+                    .collect::<()>(),
+            )
         };
 
         let mut producer = Box::pin(ProducerClient {
@@ -239,5 +233,14 @@ where
             _ptr: Arc::new(Pin::new(ptr)),
         };
         Ok(box_producer.clone())
+    }
+}
+
+impl<C> Clone for Producer<C> {
+    fn clone(&self) -> Self {
+        Self {
+            producer: self.producer.clone(),
+            _ptr: self._ptr.clone(),
+        }
     }
 }
