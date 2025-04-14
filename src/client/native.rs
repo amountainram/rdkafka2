@@ -5,22 +5,11 @@ use crate::{
     error::{KafkaError, Result},
     log::RDKafkaSyslogLogLevel,
     ptr::NativePtr,
+    topic::{NativeTopic, NativeTopicConf, Topic},
     util::ErrBuf,
 };
-use rdkafka2_sys::{RDKafka, RDKafkaErrorCode, RDKafkaTopic, RDKafkaType};
+use rdkafka2_sys::{RDKafkaErrorCode, RDKafkaType, rd_kafka_t};
 use std::{borrow::Borrow, ffi::CString, hash::Hash, mem::ManuallyDrop, sync::Arc};
-
-#[derive(Debug)]
-#[repr(transparent)]
-pub struct Topic(NativePtr<RDKafkaTopic>);
-
-unsafe impl Send for Topic {}
-
-impl Topic {
-    pub fn ptr(&self) -> *mut RDKafkaTopic {
-        self.0.ptr()
-    }
-}
 
 /// Wrapper of the native rdkafka2-sys client.
 /// Librdkafka is completely thread-safe (unless otherwise noted in the API documentation).
@@ -30,7 +19,7 @@ impl Topic {
 #[derive(Debug)]
 pub struct NativeClient<C = DefaultClientContext> {
     rd_type: RDKafkaType,
-    inner: Arc<NativePtr<RDKafka>>,
+    inner: Arc<NativePtr<rd_kafka_t>>,
     config: Arc<ClientConfig>,
     context: Arc<C>,
 }
@@ -88,7 +77,7 @@ where
         let mut native_config = ManuallyDrop::new(native_config);
         let client_ptr = unsafe {
             rdkafka2_sys::rd_kafka_new(
-                rd_type,
+                rd_type.into(),
                 native_config.ptr(),
                 err_buf.as_mut_ptr(),
                 err_buf.capacity(),
@@ -140,7 +129,7 @@ impl<C> NativeClient<C> {
         self.context.as_ref()
     }
 
-    pub fn native_ptr(&self) -> *mut RDKafka {
+    pub fn native_ptr(&self) -> *mut rd_kafka_t {
         self.inner.ptr()
     }
 
@@ -165,16 +154,32 @@ impl<C> NativeClient<C> {
         unsafe { rdkafka2_sys::rd_kafka_purge(self.inner.ptr(), timeout.into().as_millis()).into() }
     }
 
-    pub fn topic_from_name(&self, name: &str) -> Result<Topic> {
-        let topic = CString::new(name).map_err(KafkaError::Nul)?;
-        let topic_ptr = unsafe {
-            NativePtr::from_ptr(rdkafka2_sys::rd_kafka_topic_new(
-                self.native_ptr(),
-                topic.as_ptr(),
-                std::ptr::null_mut(),
-            ))
-        };
+    pub(crate) fn native_topic<T>(&self, topic: T) -> Result<NativeTopic>
+    where
+        T: Into<Topic>,
+    {
+        let topic: Topic = topic.into();
+        let topic_name = CString::new(topic.name).map_err(KafkaError::Nul)?;
+        unsafe {
+            let conf = NativeTopicConf::from_ptr(rdkafka2_sys::rd_kafka_topic_conf_new());
+            let conf = topic.config.into_iter().map(Ok::<_, KafkaError>).try_fold(
+                conf,
+                |conf, next| {
+                    let (k, v) = next?;
+                    conf.set(k.as_str(), v.as_str())?;
 
-        Ok(Topic(topic_ptr))
+                    Ok::<_, KafkaError>(conf)
+                },
+            )?;
+
+            let topic = rdkafka2_sys::rd_kafka_topic_new(
+                self.native_ptr(),
+                topic_name.as_ptr(),
+                conf.ptr(),
+            );
+            std::mem::forget(conf);
+
+            Ok(NativeTopic::from_ptr(topic))
+        }
     }
 }

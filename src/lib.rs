@@ -10,4 +10,5 @@ mod log;
 pub mod message;
 pub mod producer;
 mod ptr;
+pub mod topic;
 mod util;

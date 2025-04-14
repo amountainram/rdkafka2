@@ -259,7 +259,7 @@ where
             fields: (rd_type, config, native_config, (context,), log_level),
             ..
         } = self;
-        let rd_type = Optional::into_value(rd_type, || RDKafkaType::RD_KAFKA_PRODUCER);
+        let rd_type = Optional::into_value(rd_type, || RDKafkaType::Producer);
         let config = Optional::into_value(config, Default::default);
         let log_level = Optional::into_value(log_level, || None);
         let native_config = ResultOptional::into_value(native_config, || {

@@ -1,5 +1,5 @@
 use crate::{IntoOpaque, error::KafkaError, ptr::NativePtr, util};
-use rdkafka2_sys::{RDKafkaErrorCode, RDKafkaHeaders, RDKafkaMessage};
+use rdkafka2_sys::{RDKafkaErrorCode, rd_kafka_headers_t, rd_kafka_message_t};
 use std::{ffi::CStr, marker::PhantomData, str::Utf8Error};
 use typed_builder::TypedBuilder;
 
@@ -30,8 +30,8 @@ impl BorrowedHeaders {
         unsafe { &*(headers_ptr as *mut BorrowedHeaders) }
     }
 
-    fn as_native_ptr(&self) -> *const RDKafkaHeaders {
-        self as *const BorrowedHeaders as *const RDKafkaHeaders
+    fn as_native_ptr(&self) -> *const rd_kafka_headers_t {
+        self as *const BorrowedHeaders as *const rd_kafka_headers_t
     }
 
     /// Clones the content of `BorrowedHeaders` and returns an [`OwnedHeaders`]
@@ -52,14 +52,14 @@ impl BorrowedHeaders {
 /// headers and to pass them to the producer. See also [`BorrowedHeaders`].
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct OwnedHeaders(NativePtr<RDKafkaHeaders>);
+pub struct OwnedHeaders(NativePtr<rd_kafka_headers_t>);
 
 unsafe impl Send for OwnedHeaders {}
 
 unsafe impl Sync for OwnedHeaders {}
 
 impl OwnedHeaders {
-    pub(crate) fn ptr(&self) -> *mut RDKafkaHeaders {
+    pub(crate) fn ptr(&self) -> *mut rd_kafka_headers_t {
         self.0.ptr()
     }
 }
@@ -76,7 +76,7 @@ impl Clone for OwnedHeaders {
 
 #[repr(transparent)]
 pub struct BorrowedMessage<'a> {
-    ptr: NativePtr<RDKafkaMessage>,
+    ptr: NativePtr<rd_kafka_message_t>,
     _marker: PhantomData<&'a u8>,
 }
 
@@ -85,7 +85,7 @@ impl<'a> BorrowedMessage<'a> {
     /// pointer returned via the delivery report event. The lifetime of
     /// the message will be bound to the lifetime of the client passed as
     /// parameter.
-    pub(crate) unsafe fn from_dr_event(ptr: *mut RDKafkaMessage) -> DeliveryResult<'a> {
+    pub(crate) unsafe fn from_dr_event(ptr: *mut rd_kafka_message_t) -> DeliveryResult<'a> {
         let borrowed_message = unsafe {
             BorrowedMessage {
                 ptr: NativePtr::from_ptr(ptr),

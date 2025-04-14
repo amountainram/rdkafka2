@@ -1,9 +1,10 @@
 use rand::{Rng, distr::Alphanumeric};
 use rdkafka2::{
-    RDKafkaLogLevel,
+    KafkaError, RDKafkaLogLevel,
     client::{AdminClient, Cluster, DefaultClientContext, Node, PartitionMetadata, TopicMetadata},
     config::ClientConfig,
 };
+use rdkafka2_sys::RDKafkaErrorCode;
 use rstest::{fixture, rstest};
 use std::{env, time::Duration};
 
@@ -56,7 +57,7 @@ fn test_admin_client(config: ClientConfig) -> AdminClient {
     ])
 )]
 #[tokio::test]
-async fn create_topics(#[case] config: ClientConfig, topic_names: Vec<String>) {
+async fn create_and_delete_topics(#[case] config: ClientConfig, topic_names: Vec<String>) {
     let admin_client = test_admin_client(config);
     admin_client
         .create_topics(topic_names.clone(), Default::default())
@@ -64,11 +65,8 @@ async fn create_topics(#[case] config: ClientConfig, topic_names: Vec<String>) {
         .expect("topics to be created");
 
     let first = topic_names.first().unwrap();
-    let topic = admin_client
-        .topic_from_name(first)
-        .expect("topics to be ok");
     let metadata = admin_client
-        .metadata_for_topic(topic, Duration::from_secs(2))
+        .metadata_for_topic(first, Duration::from_secs(2))
         .await
         .expect("valid metadata");
     assert_eq!(metadata.topics.len(), 1);
@@ -87,6 +85,19 @@ async fn create_topics(#[case] config: ClientConfig, topic_names: Vec<String>) {
                 ])
                 .build()
         )
+    );
+
+    admin_client
+        .delete_topics(topic_names.clone(), Default::default())
+        .await
+        .expect("topics to be created");
+
+    assert_eq!(
+        admin_client
+            .metadata_for_topic(first, Duration::from_secs(2))
+            .await
+            .unwrap_err(),
+        KafkaError::MetadataFetch(RDKafkaErrorCode::UnknownTopicOrPartition)
     );
 }
 

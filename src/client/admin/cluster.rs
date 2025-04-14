@@ -6,12 +6,13 @@ use crate::{
 };
 use futures::TryFutureExt;
 use rdkafka2_sys::{
-    RDKafkaErrorCode, RDKafkaEventType, RDKafkaMetadata, rd_kafka_AclOperation_t, rd_kafka_Node_t,
+    RDKafkaErrorCode, RDKafkaEventType, rd_kafka_AclOperation_t, rd_kafka_Node_t,
+    rd_kafka_metadata_t,
 };
 use tokio::sync::oneshot;
 use typed_builder::TypedBuilder;
 
-pub(super) type NativeMetadata = NativePtr<RDKafkaMetadata>;
+pub(super) type NativeMetadata = NativePtr<rd_kafka_metadata_t>;
 
 #[derive(Debug, Clone, TypedBuilder, PartialEq, Eq)]
 pub struct BrokerMetadata {
@@ -50,7 +51,7 @@ pub struct Metadata {
 }
 
 pub(super) fn handle_metadata_result(
-    value: *const RDKafkaMetadata,
+    value: *const rd_kafka_metadata_t,
 ) -> Result<Metadata, RDKafkaErrorCode> {
     let metadata = unsafe { *value };
 

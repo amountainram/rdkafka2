@@ -12,60 +12,70 @@ pub(crate) unsafe trait KafkaDrop {
     const DROP: unsafe extern "C" fn(*mut Self);
 }
 
-unsafe impl KafkaDrop for rdkafka2_sys::RDKafka {
+unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_t {
     const TYPE: &'static str = "rd_kafka_t";
     const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_destroy;
 }
 
-unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaConf {
+unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_conf_t {
     const TYPE: &'static str = "rd_kafka_conf_t";
     const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_conf_destroy;
 }
 
-unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaHeaders {
+unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_headers_t {
     const TYPE: &'static str = "rd_kafka_headers_t";
     const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_headers_destroy;
 }
 
-unsafe extern "C" fn no_op(_: *mut rdkafka2_sys::RDKafkaMessage) {}
+unsafe extern "C" fn no_op(_: *mut rdkafka2_sys::rd_kafka_message_t) {}
 
-unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaMessage {
+unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_message_t {
     const TYPE: &'static str = "rd_kafka_message_t";
     const DROP: unsafe extern "C" fn(*mut Self) = no_op;
 }
 
-unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaEvent {
+unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_event_t {
     const TYPE: &'static str = "rd_kafka_event_t";
     const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_event_destroy;
 }
 
-unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaQueue {
+unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_queue_t {
     const TYPE: &'static str = "queue";
     const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_queue_destroy;
 }
 
-unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaAdminOptions {
+unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_AdminOptions_t {
     const TYPE: &'static str = "rd_kafka_AdminOptions_t";
     const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_AdminOptions_destroy;
 }
 
-unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaNewTopic {
+unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_NewTopic_t {
     const TYPE: &'static str = "rd_kafka_NewTopic_t";
     const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_NewTopic_destroy;
 }
 
-unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaTopic {
+unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_DeleteTopic_t {
+    const TYPE: &'static str = "rd_kafka_DeleteTopic_t";
+    const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_DeleteTopic_destroy;
+}
+
+unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_topic_t {
     const TYPE: &'static str = "rd_kafka_topic_t";
     const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_topic_destroy;
 }
 
-unsafe extern "C" fn rd_kafka_metadata_destroy(ptr: *mut rdkafka2_sys::RDKafkaMetadata) {
+unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_topic_conf_t {
+    const TYPE: &'static str = "rd_kafka_topic_conf_t";
+    const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_topic_conf_destroy;
+}
+
+unsafe extern "C" fn rd_kafka_metadata_destroy(ptr: *mut rdkafka2_sys::rd_kafka_metadata_t) {
     unsafe {
         rdkafka2_sys::rd_kafka_metadata_destroy(ptr as *const _);
     }
 }
 
-unsafe impl KafkaDrop for rdkafka2_sys::RDKafkaMetadata {
+unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_metadata_t {
     const TYPE: &'static str = "rd_kafka_metadata_t";
     const DROP: unsafe extern "C" fn(*mut Self) = rd_kafka_metadata_destroy;
 }

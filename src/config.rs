@@ -4,7 +4,7 @@ use crate::{
     util::{ErrBuf, cstr_to_owned},
 };
 use once_cell::sync::Lazy;
-use rdkafka2_sys::{RDKafkaConf, RDKafkaConfErrorCode};
+use rdkafka2_sys::{RDKafkaConfErrorCode, rd_kafka_conf_t};
 use std::{
     borrow::Borrow,
     collections::{HashMap, hash_map::IntoIter},
@@ -15,7 +15,7 @@ use std::{
 };
 
 #[repr(transparent)]
-struct DefaultNativeClientConfig(NativePtr<RDKafkaConf>);
+struct DefaultNativeClientConfig(NativePtr<rd_kafka_conf_t>);
 
 unsafe impl Send for DefaultNativeClientConfig {}
 
@@ -27,7 +27,7 @@ static DEFAULT_RDKAFKA_CONFIG: Lazy<Pin<Box<DefaultNativeClientConfig>>> = Lazy:
     )))
 });
 
-fn get_conf_property(conf: *mut RDKafkaConf, key: &str) -> Result<String> {
+fn get_conf_property(conf: *mut rd_kafka_conf_t, key: &str) -> Result<String> {
     let make_err = |res| KafkaError::ClientConfig(res, key.into());
     let key_c = CString::new(key.to_string())?;
 
@@ -63,14 +63,14 @@ pub(crate) fn get_conf_default_value(key: &str) -> Result<String> {
 
 /// A native rdkafka-sys client config.
 pub struct NativeClientConfig {
-    ptr: NativePtr<RDKafkaConf>,
+    ptr: NativePtr<rd_kafka_conf_t>,
 }
 
 impl NativeClientConfig {
     /// Wraps a pointer to an `RDKafkaConfig` object and returns a new `NativeClientConfig`.
     /// UNSAFE: the caller must
     /// ensure that the pointer is not null otherwise undefined behavior
-    pub(crate) unsafe fn from_ptr(ptr: *mut RDKafkaConf) -> NativeClientConfig {
+    pub(crate) unsafe fn from_ptr(ptr: *mut rd_kafka_conf_t) -> NativeClientConfig {
         unsafe {
             NativeClientConfig {
                 ptr: NativePtr::from_ptr(ptr),
@@ -78,7 +78,7 @@ impl NativeClientConfig {
         }
     }
 
-    pub fn ptr(&self) -> *mut RDKafkaConf {
+    pub fn ptr(&self) -> *mut rd_kafka_conf_t {
         self.ptr.ptr()
     }
 
@@ -104,29 +104,6 @@ impl NativeClientConfig {
         }
         Ok(())
     }
-
-    // Set internal opaque pointer to the context needed in callbacks
-    //pub(crate) unsafe fn enable_background_callback_triggering<C>(
-    //    &mut self,
-    //    //background_event_cb: fn(&NativeClient, &mut NativeEvent, &Arc<C>),
-    //    background_event_cb: unsafe extern "C" fn(*mut RDKafka, *mut RDKafkaEvent, *mut c_void),
-    //    opaque: &Arc<C>,
-    //) where
-    //    C: Sized,
-    //{
-    //    unsafe {
-    //        // C: Sized and this check should ensure that
-    //        // we are not passing a fat pointer here
-    //        assert_eq!(size_of::<*const C>(), size_of::<*const c_void>());
-    //        // Set a pointer to the application context
-    //        // that can be used by internal callbacks
-    //        rdkafka2_sys::rd_kafka_conf_set_opaque(self.ptr(), Arc::as_ptr(opaque) as *mut c_void);
-    //        rdkafka2_sys::rd_kafka_conf_set_background_event_cb(
-    //            self.ptr(),
-    //            Some(std::mem::transmute(background_event_cb)),
-    //        );
-    //    };
-    //}
 }
 
 /// Generic Kafka client configuration.

@@ -1,33 +1,33 @@
-use super::{ClientContext, DefaultClientContext, NativeClient, native::Topic};
+use super::{ClientContext, DefaultClientContext, NativeClient};
 use crate::{
     KafkaError, RDKafkaLogLevel, Timeout,
     config::{ClientConfig, NativeClientConfig},
     error::Result,
     ptr::{KafkaDrop, NativePtr},
-    util::ErrBuf,
+    topic::{DeleteTopic, NewTopic, Topic},
+    util::{ErrBuf, check_rdkafka_invalid_arg},
 };
 pub use cluster::*;
 use futures::{FutureExt, future::BoxFuture};
 use log::error;
 use rdkafka2_sys::{
-    RDKafka, RDKafkaAdminOp, RDKafkaAdminOptions, RDKafkaErrorCode, RDKafkaEvent, RDKafkaEventType,
-    RDKafkaMetadata, RDKafkaQueue, RDKafkaType,
+    RDKafkaErrorCode, RDKafkaEventType, RDKafkaType, rd_kafka_AdminOptions_t, rd_kafka_admin_op_t,
+    rd_kafka_event_t, rd_kafka_metadata_t, rd_kafka_queue_t, rd_kafka_t,
 };
 use std::{ffi::c_void, sync::Arc};
 use tokio::sync::oneshot;
-use topics::{NewTopic, TopicResult, check_rdkafka_invalid_arg};
-
+use topics::TopicResult;
 mod cluster;
 mod topics;
 
-type NativeQueue = NativePtr<RDKafkaQueue>;
+type NativeQueue = NativePtr<rd_kafka_queue_t>;
 
 unsafe impl Send for NativeQueue {}
 unsafe impl Sync for NativeQueue {}
 
 #[derive(Debug)]
 #[repr(transparent)]
-pub(crate) struct NativeAdminOptions(NativePtr<RDKafkaAdminOptions>);
+pub(crate) struct NativeAdminOptions(NativePtr<rd_kafka_AdminOptions_t>);
 
 /// Options for an admin API request.
 #[derive(Default)]
@@ -41,8 +41,8 @@ pub struct AdminOptions {
 impl AdminOptions {
     fn to_native(
         &self,
-        op: RDKafkaAdminOp,
-        client: *mut RDKafka,
+        op: rd_kafka_admin_op_t,
+        client: *mut rd_kafka_t,
         err_buf: &mut ErrBuf,
     ) -> Result<(NativeAdminOptions, oneshot::Receiver<NativeEvent>)> {
         let native_opts = unsafe {
@@ -109,10 +109,10 @@ impl AdminOptions {
 
 #[derive(Debug)]
 #[repr(transparent)]
-pub(crate) struct NativeEvent(NativePtr<RDKafkaEvent>);
+pub(crate) struct NativeEvent(NativePtr<rd_kafka_event_t>);
 
 impl NativeEvent {
-    unsafe fn from_ptr(ptr: *mut RDKafkaEvent) -> Self {
+    unsafe fn from_ptr(ptr: *mut rd_kafka_event_t) -> Self {
         Self(unsafe { NativePtr::from_ptr(ptr) })
     }
 }
@@ -130,8 +130,8 @@ where
     C: ClientContext,
 {
     unsafe extern "C" fn admin_event_cb(
-        _rk: *mut RDKafka,
-        rkev: *mut RDKafkaEvent,
+        _rk: *mut rd_kafka_t,
+        rkev: *mut rd_kafka_event_t,
         _opaque: *mut c_void,
     ) {
         let r#type = RDKafkaEventType::try_from(unsafe { rdkafka2_sys::rd_kafka_event_type(rkev) })
@@ -149,7 +149,9 @@ where
             };
 
             match ret {
-                RDKafkaEventType::CreateTopicsResult | RDKafkaEventType::DescribeClusterResult => {
+                RDKafkaEventType::CreateTopicsResult
+                | RDKafkaEventType::DeleteTopicsResult
+                | RDKafkaEventType::DescribeClusterResult => {
                     let _ = tx.send(unsafe { NativeEvent::from_ptr(rkev) });
                 }
                 _ => unimplemented!(),
@@ -175,7 +177,7 @@ where
             .config(config)
             .native_config(native_config)
             .with_log_level(log_level)
-            .rd_type(RDKafkaType::RD_KAFKA_PRODUCER)
+            .rd_type(RDKafkaType::Producer)
             .context(context)
             .try_build()?;
         let admin_client = Self {
@@ -215,7 +217,7 @@ impl<C> AdminClient<C> {
 
         err_buf.clear();
         let (opts, rx) = opts.to_native(
-            RDKafkaAdminOp::RD_KAFKA_ADMIN_OP_CREATETOPICS,
+            rd_kafka_admin_op_t::RD_KAFKA_ADMIN_OP_CREATETOPICS,
             client,
             &mut err_buf,
         )?;
@@ -233,12 +235,43 @@ impl<C> AdminClient<C> {
         topics::handle_create_topics_result(rx).await
     }
 
+    pub async fn delete_topics<I>(&self, topics: I, opts: AdminOptions) -> Result<Vec<TopicResult>>
+    where
+        I: IntoIterator,
+        I::Item: Into<DeleteTopic>,
+    {
+        let client = self.inner.native_ptr();
+        let topics = topics
+            .into_iter()
+            .map(|next| next.into().to_native())
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut err_buf = ErrBuf::new();
+        let (opts, rx) = opts.to_native(
+            rd_kafka_admin_op_t::RD_KAFKA_ADMIN_OP_DELETETOPICS,
+            client,
+            &mut err_buf,
+        )?;
+
+        unsafe {
+            rdkafka2_sys::rd_kafka_DeleteTopics(
+                client,
+                topics.as_c_array(),
+                topics.len(),
+                opts.0.ptr(),
+                self.queue.ptr(),
+            );
+        }
+
+        topics::handle_delete_topics_result(rx).await
+    }
+
     pub async fn describe_cluster(&self, opts: AdminOptions) -> Result<Cluster> {
         let client = self.inner.native_ptr();
 
         let mut err_buf = ErrBuf::new();
         let (opts, rx) = opts.to_native(
-            RDKafkaAdminOp::RD_KAFKA_ADMIN_OP_DESCRIBECLUSTER,
+            rd_kafka_admin_op_t::RD_KAFKA_ADMIN_OP_DESCRIBECLUSTER,
             client,
             &mut err_buf,
         )?;
@@ -250,10 +283,6 @@ impl<C> AdminClient<C> {
         cluster::handle_describe_cluster_result(rx).await
     }
 
-    pub fn topic_from_name(&self, name: &str) -> Result<Topic> {
-        self.inner.topic_from_name(name)
-    }
-
     pub fn blocking_metadata<T>(&self, timeout: T) -> Result<Metadata>
     where
         T: Into<Timeout>,
@@ -261,8 +290,8 @@ impl<C> AdminClient<C> {
         const ALL_TOPICS: i32 = 1;
 
         unsafe {
-            let mut metadata_ptr = std::ptr::null_mut() as *mut RDKafkaMetadata;
-            let metadata_ptr_ptr = &mut metadata_ptr as *const *mut RDKafkaMetadata;
+            let mut metadata_ptr = std::ptr::null_mut() as *mut rd_kafka_metadata_t;
+            let metadata_ptr_ptr = &mut metadata_ptr as *const *mut rd_kafka_metadata_t;
             let err = rdkafka2_sys::rd_kafka_metadata(
                 self.inner.native_ptr(),
                 ALL_TOPICS,
@@ -276,24 +305,27 @@ impl<C> AdminClient<C> {
             }
 
             let metadata = NativeMetadata::from_ptr(metadata_ptr);
-            cluster::handle_metadata_result(metadata.ptr() as *const RDKafkaMetadata)
+            cluster::handle_metadata_result(metadata.ptr() as *const rd_kafka_metadata_t)
                 .map_err(KafkaError::MetadataFetch)
         }
     }
 
-    pub fn blocking_metadata_for_topic<T>(&self, topic: Topic, timeout: T) -> Result<Metadata>
+    pub fn blocking_metadata_for_topic<R, T>(&self, topic: R, timeout: T) -> Result<Metadata>
     where
+        R: Into<Topic>,
         T: Into<Timeout>,
     {
         const SELECTED_TOPIC: i32 = 0;
 
         unsafe {
-            let mut metadata_ptr = std::ptr::null_mut() as *mut RDKafkaMetadata;
-            let metadata_ptr_ptr = &mut metadata_ptr as *const *mut RDKafkaMetadata;
+            let mut metadata_ptr = std::ptr::null_mut() as *mut rd_kafka_metadata_t;
+            let metadata_ptr_ptr = &mut metadata_ptr as *const *mut rd_kafka_metadata_t;
+
+            let native_topic = self.inner.native_topic(topic)?;
             let err = rdkafka2_sys::rd_kafka_metadata(
                 self.inner.native_ptr(),
                 SELECTED_TOPIC,
-                topic.ptr(),
+                native_topic.ptr(),
                 metadata_ptr_ptr as *mut *const _,
                 timeout.into().as_millis(),
             );
@@ -303,7 +335,7 @@ impl<C> AdminClient<C> {
             }
 
             let metadata = NativeMetadata::from_ptr(metadata_ptr);
-            cluster::handle_metadata_result(metadata.ptr() as *const RDKafkaMetadata)
+            cluster::handle_metadata_result(metadata.ptr() as *const rd_kafka_metadata_t)
                 .map_err(KafkaError::MetadataFetch)
         }
     }
@@ -329,18 +361,27 @@ where
     }
 
     #[cfg(feature = "tokio")]
-    pub async fn metadata_for_topic<T>(&self, topic: Topic, timeout: T) -> Result<Metadata>
+    pub fn metadata_for_topic<R, T>(
+        &self,
+        topic: R,
+        timeout: T,
+    ) -> impl Future<Output = Result<Metadata>> + Send
     where
+        R: Into<Topic> + Send,
         T: Into<Timeout>,
     {
+        use futures::TryFutureExt;
+
         let admin = self.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         let timeout = timeout.into();
+        let topic: Topic = topic.into();
         tokio::task::spawn_blocking(move || {
             let _ = tx.send(admin.blocking_metadata_for_topic(topic, timeout));
         });
 
-        rx.await.map_err(|_| KafkaError::Canceled).and_then(|x| x)
+        rx.map_err(|_| KafkaError::Canceled)
+            .and_then(|x| async move { x })
     }
 }
 

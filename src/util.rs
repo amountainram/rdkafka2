@@ -1,10 +1,13 @@
 use futures::FutureExt;
+use rdkafka2_sys::{RDKafkaErrorCode, rd_kafka_resp_err_t};
 use std::{
     ffi::{CStr, c_char, c_void},
     fmt::{self, Display},
     slice,
     time::Duration,
 };
+
+use crate::error::{KafkaError, Result};
 
 pub(crate) struct ErrBuf {
     buf: [u8; ErrBuf::MAX_ERR_LEN],
@@ -69,6 +72,27 @@ pub(crate) unsafe fn ptr_to_opt_slice<'a, T>(ptr: *const c_void, size: usize) ->
         None
     } else {
         unsafe { Some(slice::from_raw_parts::<T>(ptr as *const T, size)) }
+    }
+}
+
+pub(crate) fn check_rdkafka_invalid_arg(
+    res: rd_kafka_resp_err_t,
+    context: &str,
+    err_buf: &ErrBuf,
+) -> Result<()> {
+    match res.into() {
+        RDKafkaErrorCode::NoError => Ok(()),
+        RDKafkaErrorCode::InvalidArgument => {
+            let msg = if err_buf.len() == 0 {
+                "invalid argument".into()
+            } else {
+                err_buf.to_string()
+            };
+            Err(KafkaError::AdminOpCreation(msg))
+        }
+        res => Err(KafkaError::AdminOpCreation(format!(
+            "setting {context} options returned unexpected error code {res}"
+        ))),
     }
 }
 

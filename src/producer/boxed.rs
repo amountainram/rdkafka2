@@ -9,7 +9,7 @@ use crate::{
     ptr::IntoOpaque,
     util::Timeout,
 };
-use rdkafka2_sys::{RDKafka, RDKafkaErrorCode, RDKafkaMessage, RDKafkaType};
+use rdkafka2_sys::{RDKafkaErrorCode, RDKafkaType, rd_kafka_message_t, rd_kafka_t};
 use std::{
     ffi::{CString, c_void},
     pin::Pin,
@@ -86,13 +86,14 @@ where
     C: ProducerContext,
 {
     unsafe extern "C" fn dr_msg_cb(
-        _rk: *mut RDKafka,
-        rkmessage: *const RDKafkaMessage,
+        _rk: *mut rd_kafka_t,
+        rkmessage: *const rd_kafka_message_t,
         opaque: *mut c_void,
     ) {
         let producer = unsafe { &**(opaque as *mut *mut ProducerClient<C>) };
         let delivery_opaque = unsafe { C::DeliveryOpaque::from_ptr((*rkmessage)._private) };
-        let result = unsafe { BorrowedMessage::from_dr_event(rkmessage as *mut RDKafkaMessage) };
+        let result =
+            unsafe { BorrowedMessage::from_dr_event(rkmessage as *mut rd_kafka_message_t) };
 
         producer.delivery_message_callback(result, delivery_opaque);
     }
@@ -193,7 +194,7 @@ where
         }
 
         let native_client = NativeClient::builder()
-            .rd_type(RDKafkaType::RD_KAFKA_PRODUCER)
+            .rd_type(RDKafkaType::Producer)
             .config(config)
             .native_config(native_config)
             .context(context)
