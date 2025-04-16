@@ -53,6 +53,9 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Install Cargo tools
+        run: cargo install cargo-make
+
       - name: Install dependencies
         run: |
           sudo apt-get update;
