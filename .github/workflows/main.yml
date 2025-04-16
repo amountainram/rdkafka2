@@ -54,7 +54,7 @@ jobs:
           toolchain: stable
 
       - name: Install Cargo tools
-        run: cargo install cargo-make
+        uses: ./.github/workflows/install-cargo-make.yml
 
       - name: Install dependencies
         run: |
