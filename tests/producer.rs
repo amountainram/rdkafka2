@@ -9,7 +9,6 @@ use rdkafka2::{
 };
 use rdkafka2_sys::RDKafkaErrorCode;
 use rstest::{fixture, rstest};
-use std::env;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
@@ -28,11 +27,13 @@ fn topic_name() -> String {
 
 fn kafka_broker() -> &'static str {
     static LOCALHOST_BROKER: &str = "localhost:9092";
-    static DEFAULT_CI_DOCKER_BROKER: &str = "docker:9092";
+    //static DEFAULT_CI_DOCKER_BROKER: &str = "docker:9092";
+    //
+    //env::var("CI")
+    //    .map(|_| DEFAULT_CI_DOCKER_BROKER)
+    //    .unwrap_or(LOCALHOST_BROKER)
 
-    env::var("CI")
-        .map(|_| DEFAULT_CI_DOCKER_BROKER)
-        .unwrap_or(LOCALHOST_BROKER)
+    LOCALHOST_BROKER
 }
 
 type OwnedDeliveryResult = Result<OwnedMessage, (KafkaError, OwnedMessage)>;
@@ -87,7 +88,7 @@ fn test_producer(
         ("debug", "all"),
     ])
 )]
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn unknown_topic(#[case] config: ClientConfig, topic_name: String) {
     use rdkafka2::message::BaseRecord;
 

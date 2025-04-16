@@ -11,7 +11,7 @@
    fun:test::console::run_tests_console
    fun:test::test_main
    fun:test::test_main_static
-   fun:producer::main
-   fun:core::ops::function::FnOnce::call_once
    fun:std::sys::backtrace::__rust_begin_short_backtrace
+   fun:std::rt::lang_start::{{closure}}
+   fun:std::rt::lang_start_internal
 }

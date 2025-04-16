@@ -1,0 +1,95 @@
+name: Tests
+
+on:
+  workflow_call:
+    inputs:
+      cargo_home:
+        required: false
+        type: string
+        default: ~/.cargo
+      cargo_make_version:
+        required: false
+        type: string
+        default: "0.37.24"
+      rustfilt_version:
+        required: false
+        type: string
+        default: "0.2.1"
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update;
+          sudo apt-get install -y libsasl2-dev;
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run tests
+        run: cargo test --lib --features=sasl,ssl
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install rustlift ${{ inputs.rustfilt_version }}
+        run: cargo install rustfilt@${{ inputs.rustfilt_version }}
+
+      - name: Install cargo-make ${{ inputs.cargo_make_version }}
+        run: |
+          curl -L -o cargo-make.zip "https://github.com/sagiegurari/cargo-make/releases/download/${{ inputs.cargo_make_version }}/cargo-make-v${{ inputs.cargo_make_version }}-x86_64-unknown-linux-gnu.zip"
+          unzip cargo-make.zip;
+          chmod +x cargo-make-v${{ inputs.cargo_make_version }}-x86_64-unknown-linux-gnu/cargo-make;
+          mkdir -p ${{ inputs.cargo_home }}/bin;
+          mv cargo-make-v${{ inputs.cargo_make_version }}-x86_64-unknown-linux-gnu/cargo-make ${{ inputs.cargo_home }}/bin/cargo-make;
+
+      - name: Check installation
+        run: |
+          cargo make --version;
+          rustfilt --version;
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update;
+          sudo apt-get install -y libsasl2-dev valgrind;
+
+      - name: Check rustc version
+        run: rustc --version
+
+      - name: Run e2e tests
+        run: cargo make e2e

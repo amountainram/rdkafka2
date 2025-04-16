@@ -9,13 +9,12 @@ use std::str;
 #[cfg(not(feature = "tracing"))]
 pub use log::{debug, error, info, trace, warn};
 
-use num_enum::TryFromPrimitive;
 #[cfg(feature = "tracing")]
 pub use tracing::{debug, error, info, trace, warn};
 
 /// Syslog [log levels](https://en.wikipedia.org/wiki/Syslog#Severity_level)
 /// The log levels supported by librdkafka.
-#[derive(Copy, Clone, Debug, TryFromPrimitive)]
+#[derive(Copy, Clone, Debug)]
 #[repr(i32)]
 pub enum RDKafkaSyslogLogLevel {
     /// Higher priority then [`Level::Error`](log::Level::Error) from the log

@@ -1,3 +1,4 @@
+use backon::{ConstantBuilder, RetryableWithContext};
 use rand::{Rng, distr::Alphanumeric};
 use rdkafka2::{
     KafkaError, RDKafkaLogLevel,
@@ -6,7 +7,7 @@ use rdkafka2::{
 };
 use rdkafka2_sys::RDKafkaErrorCode;
 use rstest::{fixture, rstest};
-use std::{env, time::Duration};
+use std::time::Duration;
 
 fn generate_random_string(len: usize) -> String {
     rand::rng()
@@ -23,20 +24,22 @@ fn topic_names() -> Vec<String> {
 
 fn kafka_host() -> &'static str {
     const LOCALHOST_HOST: &str = "localhost";
-    const DEFAULT_CI_DOCKER_HOST: &str = "docker";
+    //const DEFAULT_CI_DOCKER_HOST: &str = "docker";
 
-    env::var("CI")
-        .map(|_| DEFAULT_CI_DOCKER_HOST)
-        .unwrap_or(LOCALHOST_HOST)
+    //env::var("CI")
+    //    .map(|_| DEFAULT_CI_DOCKER_HOST)
+    //    .unwrap_or(LOCALHOST_HOST)
+    LOCALHOST_HOST
 }
 
 fn kafka_broker() -> &'static str {
     const LOCALHOST_BROKER: &str = "localhost:9092";
-    const DEFAULT_CI_DOCKER_BROKER: &str = "docker:9092";
+    //const DEFAULT_CI_DOCKER_BROKER: &str = "docker:9092";
 
-    env::var("CI")
-        .map(|_| DEFAULT_CI_DOCKER_BROKER)
-        .unwrap_or(LOCALHOST_BROKER)
+    //env::var("CI")
+    //    .map(|_| DEFAULT_CI_DOCKER_BROKER)
+    //    .unwrap_or(LOCALHOST_BROKER)
+    LOCALHOST_BROKER
 }
 
 fn test_admin_client(config: ClientConfig) -> AdminClient {
@@ -56,7 +59,7 @@ fn test_admin_client(config: ClientConfig) -> AdminClient {
         ("debug", "all"),
     ])
 )]
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn create_and_delete_topics(#[case] config: ClientConfig, topic_names: Vec<String>) {
     let admin_client = test_admin_client(config);
     admin_client
@@ -92,11 +95,23 @@ async fn create_and_delete_topics(#[case] config: ClientConfig, topic_names: Vec
         .await
         .expect("topics to be created");
 
-    assert_eq!(
-        admin_client
-            .metadata_for_topic(first, Duration::from_secs(2))
+    let (_, error) = (|(admin_client, topic): (AdminClient, String)| async move {
+        let result = match admin_client
+            .metadata_for_topic(&topic, Duration::from_secs(2))
             .await
-            .unwrap_err(),
+        {
+            Err(err) => Ok(err),
+            Ok(m) => Err(m),
+        };
+
+        ((admin_client, topic), result)
+    })
+    .retry(ConstantBuilder::default())
+    .context((admin_client, first.to_string()))
+    .await;
+
+    assert_eq!(
+        error.unwrap(),
         KafkaError::MetadataFetch(RDKafkaErrorCode::UnknownTopicOrPartition)
     );
 }
@@ -109,7 +124,7 @@ async fn create_and_delete_topics(#[case] config: ClientConfig, topic_names: Vec
         ("debug", "all"),
     ])
 )]
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn describe_cluster(#[case] config: ClientConfig) {
     let admin_client = test_admin_client(config);
     let cluster = admin_client
