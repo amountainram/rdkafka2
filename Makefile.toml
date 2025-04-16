@@ -20,7 +20,9 @@ args = ["compose", "--file", "tests/docker-compose.yml", "down"]
 [tasks.e2e_tests]
 script = '''
     set -e
-    executables=$(cargo test --tests --no-run --message-format=json \
+
+    cargo_args="--features=sasl,ssl"
+    executables=$(cargo test --tests $cargo_args --no-run --message-format=json \
         | jq -r 'select(.reason == "compiler-artifact" and .profile.test == true) | .executable' \
         | grep -v null \
         | grep -v '/rdkafka2-')
@@ -45,7 +47,9 @@ run_task = { name = [
 [tasks.e2e_tests_update]
 script = '''
     set -e
-    executables=$(cargo test --tests --no-run --message-format=json \
+
+    cargo_args="--features=sasl,ssl"
+    executables=$(cargo test --tests $cargo_args --no-run --message-format=json \
         | jq -r 'select(.reason == "compiler-artifact" and .profile.test == true) | .executable' \
         | grep -v null \
         | grep -v '/rdkafka2-')
@@ -57,6 +61,7 @@ script = '''
         test_name=$(basename "$exe" | sed -r 's/-([^-]+)$//');
         valgrind $valgrind_args --log-file=/tmp/${test_name}.valgrind.log "$exe";
         cat /tmp/${test_name}.valgrind.log | sed -e "s/<insert_a_suppression_name_here>/${test_name}/" | ./tests/suppressions.sh > ./tests/suppressions/${test_name}.supp
+        cat ./tests/suppressions/${test_name}.supp | rustfilt -o ./tests/suppressions/${test_name}.demangled.supp
     done
 '''
 

@@ -1,0 +1,17 @@
+{
+   producer
+   Memcheck:Leak
+   match-leak-kinds: possible
+   fun:malloc
+   fun:std::thread::Thread::new
+   fun:std::thread::current::init_current
+   fun:std::sync::mpmc::context::Context::new
+   fun:std::sys::thread_local::native::lazy::Storage<T,D>::initialize
+   fun:std::sync::mpmc::list::Channel<T>::recv
+   fun:test::console::run_tests_console
+   fun:test::test_main
+   fun:test::test_main_static
+   fun:producer::main
+   fun:core::ops::function::FnOnce::call_once
+   fun:std::sys::backtrace::__rust_begin_short_backtrace
+}
