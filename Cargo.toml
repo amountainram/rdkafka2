@@ -1,6 +1,6 @@
 [package]
 name = "rdkafka2"
-version = "0.0.0"
+version = "0.0.1"
 repository = "https://github.com/amountainram/rdkafka2"
 license = "MIT"
 keywords = ["kafka", "rdkafka"]
