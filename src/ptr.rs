@@ -1,4 +1,5 @@
 use log::trace;
+use rdkafka2_sys::{rd_kafka_AclBinding_destroy, rd_kafka_ConfigResource_destroy};
 use std::{
     ffi::c_void,
     marker::PhantomPinned,
@@ -78,6 +79,16 @@ unsafe extern "C" fn rd_kafka_metadata_destroy(ptr: *mut rdkafka2_sys::rd_kafka_
 unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_metadata_t {
     const TYPE: &'static str = "rd_kafka_metadata_t";
     const DROP: unsafe extern "C" fn(*mut Self) = rd_kafka_metadata_destroy;
+}
+
+unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_ConfigResource_t {
+    const TYPE: &'static str = "rd_kafka_ConfigResource_t";
+    const DROP: unsafe extern "C" fn(*mut Self) = rd_kafka_ConfigResource_destroy;
+}
+
+unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_AclBindingFilter_t {
+    const TYPE: &'static str = "rd_kafka_AclBindingFilter_t";
+    const DROP: unsafe extern "C" fn(*mut Self) = rd_kafka_AclBinding_destroy;
 }
 
 #[derive(Debug, Clone)]

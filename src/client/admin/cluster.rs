@@ -1,4 +1,8 @@
-use super::{NativeEvent, and_then_event};
+use super::{
+    AclOperation, NativeEvent, ResourceType,
+    acls::{NativeConfigResource, ResourceTypeRequest},
+    and_then_event,
+};
 use crate::{
     error::{KafkaError, Result},
     ptr::NativePtr,
@@ -6,9 +10,10 @@ use crate::{
 };
 use futures::TryFutureExt;
 use rdkafka2_sys::{
-    RDKafkaErrorCode, RDKafkaEventType, rd_kafka_AclOperation_t, rd_kafka_Node_t,
-    rd_kafka_metadata_t,
+    RDKafkaErrorCode, RDKafkaEventType, rd_kafka_AclOperation_t, rd_kafka_ConfigResource_t,
+    rd_kafka_Node_t, rd_kafka_ResourceType_t, rd_kafka_metadata_t,
 };
+use std::{collections::HashMap, ffi::CString};
 use tokio::sync::oneshot;
 use typed_builder::TypedBuilder;
 
@@ -137,20 +142,18 @@ pub struct Cluster {
     pub nodes: Vec<Node>,
     pub controller: Node,
     #[builder(default)]
-    pub authorized_operations: Vec<AuthorizedOperation>,
+    pub authorized_operations: Vec<AclOperation>,
 }
 
 fn build_authorized_operations(
     native_authorized_operations: *const rd_kafka_AclOperation_t,
     n: usize,
-) -> Vec<AuthorizedOperation> {
+) -> Vec<AclOperation> {
     let mut ops = Vec::with_capacity(n);
     for i in 0..n {
         unsafe {
             let native_op = *native_authorized_operations.add(i);
-            ops.push(cstr_to_owned(rdkafka2_sys::rd_kafka_AclOperation_name(
-                native_op,
-            )));
+            ops.push(AclOperation::try_from(native_op).unwrap());
         }
     }
 
@@ -229,6 +232,162 @@ pub(super) async fn handle_describe_cluster_result(
                 })
                 .ok_or(KafkaError::AdminOpCreation(
                     "error while creating topics".into(),
+                ))
+        })
+        .await
+}
+
+#[derive(Debug, Clone, TypedBuilder, PartialEq, Eq)]
+pub struct ConfigResourceRequest {
+    #[builder(default = ResourceTypeRequest::Any, setter(into))]
+    pub r#type: ResourceTypeRequest,
+    #[builder(setter(into))]
+    pub name: String,
+}
+
+impl<S> From<S> for ConfigResourceRequest
+where
+    S: Into<String>,
+{
+    fn from(name: S) -> Self {
+        Self {
+            r#type: ResourceTypeRequest::Any,
+            name: name.into(),
+        }
+    }
+}
+
+impl ConfigResourceRequest {
+    pub(super) fn to_native(&self) -> Result<NativeConfigResource> {
+        let name = CString::new(self.name.as_str())?;
+        Ok(unsafe {
+            NativeConfigResource::from_ptr(rdkafka2_sys::rd_kafka_ConfigResource_new(
+                self.r#type.into(),
+                name.as_ptr(),
+            ))
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigEntry {
+    pub value: Option<String>,
+    pub source: String,
+    pub is_read_only: bool,
+    pub is_default: bool,
+    pub is_sensitive: bool,
+    pub is_synonym: bool,
+    pub synonyms: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigResource {
+    pub r#type: ResourceType,
+    pub name: String,
+    pub config: HashMap<String, ConfigEntry>,
+}
+
+fn build_config_resource(
+    native_resource: *const rd_kafka_ConfigResource_t,
+) -> Result<ConfigResource> {
+    unsafe {
+        let native_type = rdkafka2_sys::rd_kafka_ConfigResource_type(native_resource);
+        let r#type = match native_type {
+            rd_kafka_ResourceType_t::RD_KAFKA_RESOURCE_ANY
+            | rd_kafka_ResourceType_t::RD_KAFKA_RESOURCE__CNT
+            | rd_kafka_ResourceType_t::RD_KAFKA_RESOURCE_UNKNOWN => {
+                Err(KafkaError::UnknownResource(native_type as i32))
+            }
+            rd_kafka_ResourceType_t::RD_KAFKA_RESOURCE_TOPIC => Ok(ResourceType::Topic),
+            rd_kafka_ResourceType_t::RD_KAFKA_RESOURCE_GROUP => todo!(),
+            rd_kafka_ResourceType_t::RD_KAFKA_RESOURCE_BROKER => Ok(ResourceType::Broker),
+            rd_kafka_ResourceType_t::RD_KAFKA_RESOURCE_TRANSACTIONAL_ID => todo!(),
+        }?;
+
+        let mut n = 0;
+        let name = cstr_to_owned(rdkafka2_sys::rd_kafka_ConfigResource_name(native_resource));
+        let configs = rdkafka2_sys::rd_kafka_ConfigResource_configs(native_resource, &mut n);
+        let mut config = HashMap::with_capacity(n);
+        for i in 0..n {
+            let entry = *configs.add(i);
+            let name = cstr_to_owned(rdkafka2_sys::rd_kafka_ConfigEntry_name(entry));
+            let value = rdkafka2_sys::rd_kafka_ConfigEntry_value(entry);
+
+            config.insert(
+                name,
+                ConfigEntry {
+                    value: (!value.is_null()).then(|| cstr_to_owned(value)),
+                    source: cstr_to_owned(rdkafka2_sys::rd_kafka_ConfigSource_name(
+                        rdkafka2_sys::rd_kafka_ConfigEntry_source(entry),
+                    )),
+                    is_read_only: rdkafka2_sys::rd_kafka_ConfigEntry_is_read_only(entry) == 1,
+                    is_default: rdkafka2_sys::rd_kafka_ConfigEntry_is_default(entry) == 1,
+                    is_sensitive: rdkafka2_sys::rd_kafka_ConfigEntry_is_sensitive(entry) == 1,
+                    is_synonym: rdkafka2_sys::rd_kafka_ConfigEntry_is_synonym(entry) == 1,
+                    synonyms: {
+                        let mut n = 0;
+                        let native_synonyms =
+                            rdkafka2_sys::rd_kafka_ConfigEntry_synonyms(entry, &mut n);
+                        let mut synonyms = Vec::with_capacity(n);
+                        for i in 0..n {
+                            let synonym = *native_synonyms.add(i);
+                            synonyms.push(cstr_to_owned(rdkafka2_sys::rd_kafka_ConfigEntry_name(
+                                synonym,
+                            )));
+                        }
+                        synonyms
+                    },
+                },
+            );
+        }
+
+        Ok(ConfigResource {
+            r#type,
+            name,
+            config,
+        })
+    }
+}
+
+fn build_config_resources(
+    native_node: *mut *const rd_kafka_ConfigResource_t,
+    n: usize,
+) -> Vec<Result<ConfigResource>> {
+    let mut resources = Vec::with_capacity(n);
+    for i in 0..n {
+        unsafe {
+            let native_resource = *native_node.add(i);
+            if let Some(err) =
+                RDKafkaErrorCode::from(rdkafka2_sys::rd_kafka_ConfigResource_error(native_resource))
+                    .error()
+            {
+                resources.push(Err(KafkaError::AdminOp(err)));
+            } else {
+                resources.push(build_config_resource(native_resource));
+            }
+        }
+    }
+
+    resources
+}
+
+pub(super) async fn handle_describe_configs_result(
+    rx: oneshot::Receiver<NativeEvent>,
+) -> Result<Vec<Result<ConfigResource>>> {
+    rx.map_err(|_| KafkaError::AdminApiError)
+        .and_then(and_then_event(RDKafkaEventType::DescribeConfigsResult))
+        .and_then(|(_, evt)| async move {
+            let res = unsafe { rdkafka2_sys::rd_kafka_event_DescribeConfigs_result(evt.0.ptr()) };
+
+            (!res.is_null())
+                .then(|| unsafe {
+                    let mut n = 0;
+                    let native_resources =
+                        rdkafka2_sys::rd_kafka_DescribeConfigs_result_resources(res, &mut n);
+                    build_config_resources(native_resources, n)
+                })
+                .ok_or(KafkaError::AdminOpCreation(
+                    "error while creating config resources".into(),
                 ))
         })
         .await

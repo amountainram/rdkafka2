@@ -88,6 +88,7 @@ impl Default for TopicReplication {
 #[derive(Debug, TypedBuilder)]
 pub struct NewTopic {
     /// The name of the new topic.
+    #[builder(setter(into))]
     pub name: String,
     /// The initial number of partitions.
     #[builder(default = 1)]
@@ -98,6 +99,15 @@ pub struct NewTopic {
     /// The initial configuration parameters for the topic.
     #[builder(default)]
     pub config: HashMap<String, String>,
+}
+
+impl<S> From<S> for NewTopic
+where
+    S: Into<String>,
+{
+    fn from(name: S) -> Self {
+        Self::builder().name(name).build()
+    }
 }
 
 /// Configuration for a CreateTopic operation.

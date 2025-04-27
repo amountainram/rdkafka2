@@ -1,0 +1,9 @@
+{
+    "bootstrap.servers": "localhost:8093",
+    "security.protocol": "SASL_SSL",
+    "sasl.mechanism": "OAUTHBEARER",
+    "sasl.oauthbearer.method": "default",
+    "sasl.oauthbearer.config": "principal=admin unsecuredLoginStringClaim_sub=admin",
+    "log_level": "7",
+    "debug": "all"
+}

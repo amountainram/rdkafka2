@@ -1,0 +1,98 @@
+services:
+  kafka-scram:
+    image: apache/kafka:3.9.0
+    ports:
+      - "9093:9093"
+    networks:
+      - kafka-net
+    volumes:
+      - ./kafka/scram/server.properties:/opt/kafka/config/kraft/server.properties
+      - ./kafka/log4j.properties:/opt/kafka/config/log4j.properties
+      - ./kafka/scram/jaas.conf:/opt/kafka/config/kafka_server_jaas.conf
+      - ./kafka/scram/scram_init.sh:/opt/kafka/bin/scram_init.sh
+      - ./kafka/ssl/kafka.keystore.jks:/etc/kafka/secrets/kafka.keystore.jks
+      - ./kafka/ssl/kafka.truststore.jks:/etc/kafka/secrets/kafka.truststore.jks
+    environment:
+      KAFKA_HEAP_OPTS: -Xmx512M
+      KAFKA_KRAFT_CLUSTER_ID: YTM1MjQxY2UyY2NmNDZjMG
+      KAFKA_OPTS: "-Djava.security.auth.login.config=/opt/kafka/config/kafka_server_jaas.conf"
+    healthcheck:
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list" ]
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    command: [
+      "sh", "-c",
+      "/opt/kafka/bin/kafka-storage.sh format --cluster-id $$KAFKA_KRAFT_CLUSTER_ID -c /opt/kafka/config/kraft/server.properties && /opt/kafka/bin/kafka-server-start.sh /opt/kafka/config/kraft/server.properties"
+    ]
+
+  kafka-oauthbearer:
+    image: apache/kafka:3.9.0
+    ports:
+      - "8093:8093"
+    networks:
+      - kafka-net
+    volumes:
+      - ./kafka/oauthbearer/server.properties:/opt/kafka/config/kraft/server.properties
+      - ./kafka/log4j.properties:/opt/kafka/config/log4j.properties
+      - ./kafka/oauthbearer/jaas.conf:/opt/kafka/config/kafka_server_jaas.conf
+      - ./kafka/ssl/kafka.keystore.jks:/etc/kafka/secrets/kafka.keystore.jks
+      - ./kafka/ssl/kafka.truststore.jks:/etc/kafka/secrets/kafka.truststore.jks
+    environment:
+      KAFKA_HEAP_OPTS: -Xmx512M
+      KAFKA_KRAFT_CLUSTER_ID: YTM1MjQxY2UyY2NmNDZjMG
+      KAFKA_OPTS: "-Djava.security.auth.login.config=/opt/kafka/config/kafka_server_jaas.conf"
+    healthcheck:
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list" ]
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    command: [
+      "sh", "-c",
+      "/opt/kafka/bin/kafka-storage.sh format --cluster-id $$KAFKA_KRAFT_CLUSTER_ID -c /opt/kafka/config/kraft/server.properties && /opt/kafka/bin/kafka-server-start.sh /opt/kafka/config/kraft/server.properties"
+    ]
+
+  kafka-ui:
+    image: ghcr.io/kafbat/kafka-ui:v1.2.0@sha256:185da4ad3e88538a0f4da067f4c7bb23aa0efa608c74d115f0876919b5d3a91b
+    networks:
+      - kafka-net
+    ports:
+      - '8080:8080'
+    environment:
+      DYNAMIC_CONFIG_ENABLED: 'true'
+      KAFKA_CLUSTERS_0_NAME: kafka-scram
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-scram:9092
+      KAFKA_CLUSTERS_0_PROPERTIES_SSL_TRUSTSTORE_LOCATION: /etc/kafka/secrets/kafka.truststore.jks
+      KAFKA_CLUSTERS_0_PROPERTIES_SSL_TRUSTSTORE_PASSWORD: password
+      KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL: SASL_SSL
+      KAFKA_CLUSTERS_0_PROPERTIES_SASL_MECHANISM: SCRAM-SHA-512
+      KAFKA_CLUSTERS_0_PROPERTIES_SASL_JAAS_CONFIG: "org.apache.kafka.common.security.scram.ScramLoginModule required username=\"admin\" password=\"password\";"
+      KAFKA_CLUSTERS_1_NAME: kafka-oauthbearer
+      KAFKA_CLUSTERS_1_BOOTSTRAPSERVERS: kafka-oauthbearer:9092
+      KAFKA_CLUSTERS_1_PROPERTIES_SSL_TRUSTSTORE_LOCATION: /etc/kafka/secrets/kafka.truststore.jks
+      KAFKA_CLUSTERS_1_PROPERTIES_SSL_TRUSTSTORE_PASSWORD: password
+      KAFKA_CLUSTERS_1_PROPERTIES_SECURITY_PROTOCOL: SASL_SSL
+      KAFKA_CLUSTERS_1_PROPERTIES_SASL_MECHANISM: OAUTHBEARER
+      KAFKA_CLUSTERS_1_PROPERTIES_SASL_JAAS_CONFIG: "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required unsecuredLoginStringClaim_sub=\"admin\";"
+    volumes:
+      - ./kafka/ssl/kafka.truststore.jks:/etc/kafka/secrets/kafka.truststore.jks
+    depends_on:
+      kafka-scram:
+        condition: service_healthy
+      kafka-oauthbearer:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 400M
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -q --spider http://localhost:8080/actuator/health" ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+networks:
+  kafka-net:

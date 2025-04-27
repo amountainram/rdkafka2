@@ -5,18 +5,25 @@ use crate::{
     error::Result,
     ptr::{KafkaDrop, NativePtr},
     topic::{DeleteTopic, NewTopic, Topic},
-    util::{ErrBuf, check_rdkafka_invalid_arg},
+    util::{ErrBuf, check_rdkafka_invalid_arg, cstr_to_owned},
 };
+pub use acls::*;
 pub use cluster::*;
 use futures::{FutureExt, future::BoxFuture};
-use log::error;
+use log::{error, info};
 use rdkafka2_sys::{
     RDKafkaErrorCode, RDKafkaEventType, RDKafkaType, rd_kafka_AdminOptions_t, rd_kafka_admin_op_t,
     rd_kafka_event_t, rd_kafka_metadata_t, rd_kafka_queue_t, rd_kafka_t,
 };
-use std::{ffi::c_void, sync::Arc};
+use std::{
+    ffi::{CString, c_char, c_void},
+    ptr,
+    sync::Arc,
+};
 use tokio::sync::oneshot;
 use topics::TopicResult;
+
+mod acls;
 mod cluster;
 mod topics;
 
@@ -143,18 +150,21 @@ where
             });
 
         if let Ok(ret) = r#type {
-            let tx = unsafe {
-                let opaque = rdkafka2_sys::rd_kafka_event_opaque(rkev);
-                Box::from_raw(opaque as *mut oneshot::Sender<NativeEvent>)
-            };
-
             match ret {
                 RDKafkaEventType::CreateTopicsResult
                 | RDKafkaEventType::DeleteTopicsResult
-                | RDKafkaEventType::DescribeClusterResult => {
+                | RDKafkaEventType::DescribeAclsResult
+                | RDKafkaEventType::DescribeClusterResult
+                | RDKafkaEventType::DescribeConfigsResult => {
+                    let tx = unsafe {
+                        let opaque = rdkafka2_sys::rd_kafka_event_opaque(rkev);
+                        Box::from_raw(opaque as *mut oneshot::Sender<NativeEvent>)
+                    };
                     let _ = tx.send(unsafe { NativeEvent::from_ptr(rkev) });
                 }
-                _ => unimplemented!(),
+                _ => {
+                    info!("background queue received an event of type {:?}", ret);
+                }
             }
         }
     }
@@ -171,6 +181,41 @@ where
                 native_config.ptr(),
                 Some(Self::admin_event_cb),
             );
+            rdkafka2_sys::rd_kafka_conf_enable_sasl_queue(native_config.ptr(), 1);
+            unsafe extern "C" fn oauthbearer_token_refresh_cb(
+                rk: *mut rd_kafka_t,
+                oauthbearer_config: *const c_char,
+                _opaque: *mut c_void,
+            ) {
+                // This is a no-op for now
+
+                info!("oauthbearer_token_refresh_cb called {}", unsafe {
+                    cstr_to_owned(oauthbearer_config)
+                });
+                unsafe {
+                    let mut err_buf = ErrBuf::new();
+                    let token_value = CString::new("").unwrap();
+                    let principal = CString::new("admin").unwrap();
+                    let resp = rdkafka2_sys::rd_kafka_oauthbearer_set_token(
+                        rk,
+                        token_value.as_ptr(),
+                        86400000,
+                        principal.as_ptr(),
+                        ptr::null_mut(),
+                        0,
+                        err_buf.as_mut_ptr(),
+                        err_buf.capacity(),
+                    );
+                    if let Some(err) = RDKafkaErrorCode::from(resp).error() {
+                        error!("oauthbearer_token_refresh_cb failed: {}", err);
+                    }
+                }
+            }
+
+            rdkafka2_sys::rd_kafka_conf_set_oauthbearer_token_refresh_cb(
+                native_config.ptr(),
+                Some(oauthbearer_token_refresh_cb),
+            );
         }
 
         let native_client = NativeClient::builder()
@@ -180,6 +225,16 @@ where
             .rd_type(RDKafkaType::Producer)
             .context(context)
             .try_build()?;
+
+        //unsafe {
+        //    let err = rdkafka2_sys::rd_kafka_error_code(
+        //        rdkafka2_sys::rd_kafka_sasl_background_callbacks_enable(native_client.native_ptr()),
+        //    );
+        //    if let Some(err) = RDKafkaErrorCode::from(err).error() {
+        //        return Err(KafkaError::SaslOauthbearerConfig(err));
+        //    }
+        //}
+
         let admin_client = Self {
             queue: unsafe {
                 NativeQueue::from_ptr(rdkafka2_sys::rd_kafka_queue_get_background(
@@ -281,6 +336,108 @@ impl<C> AdminClient<C> {
         }
 
         cluster::handle_describe_cluster_result(rx).await
+    }
+
+    pub async fn describe_configs<I>(
+        &self,
+        resources: I,
+        opts: AdminOptions,
+    ) -> Result<Vec<Result<ConfigResource>>>
+    where
+        I: IntoIterator,
+        I::Item: Into<ConfigResourceRequest>,
+    {
+        let client = self.inner.native_ptr();
+        let resources = resources
+            .into_iter()
+            .scan(false, |broker, next| {
+                let req = next.into();
+                if req.r#type == ResourceTypeRequest::Broker && *broker {
+                    return Some(Err(KafkaError::AdminOpCreation(
+                        "multiple broker resources are not allowed".to_string(),
+                    )));
+                } else if req.r#type == ResourceTypeRequest::Broker {
+                    *broker = true;
+                }
+
+                Some(req.to_native())
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut err_buf = ErrBuf::new();
+        let (opts, rx) = opts.to_native(
+            rd_kafka_admin_op_t::RD_KAFKA_ADMIN_OP_DESCRIBECONFIGS,
+            client,
+            &mut err_buf,
+        )?;
+
+        unsafe {
+            rdkafka2_sys::rd_kafka_DescribeConfigs(
+                client,
+                resources.as_c_array(),
+                resources.len(),
+                opts.0.ptr(),
+                self.queue.ptr(),
+            );
+        }
+
+        cluster::handle_describe_configs_result(rx).await
+    }
+
+    pub async fn describe_resource<S>(
+        &self,
+        name: S,
+        r#type: ResourceTypeRequest,
+        opts: AdminOptions,
+    ) -> Result<ConfigResource>
+    where
+        S: Into<String>,
+    {
+        let resources = vec![
+            ConfigResourceRequest::builder()
+                .name(name)
+                .r#type(r#type)
+                .build(),
+        ];
+        let mut result = self.describe_configs(resources, opts).await?;
+        result
+            .pop()
+            .ok_or(KafkaError::NoMessageReceived)
+            .and_then(|x| x)
+    }
+
+    pub async fn describe_acls<T>(
+        &self,
+        acl_binding_filter: AclBindingFilter,
+        timeout: T,
+    ) -> Result<Vec<Result<AclBinding>>>
+    where
+        T: Into<Timeout>,
+    {
+        let client = self.inner.native_ptr();
+        let acl_binding_filter = acl_binding_filter.to_native()?;
+
+        let mut err_buf = ErrBuf::new();
+        let opts = AdminOptions {
+            request_timeout: Some(timeout.into()),
+            ..Default::default()
+        };
+        let (opts, rx) = opts.to_native(
+            rd_kafka_admin_op_t::RD_KAFKA_ADMIN_OP_DESCRIBEACLS,
+            client,
+            &mut err_buf,
+        )?;
+
+        unsafe {
+            rdkafka2_sys::rd_kafka_DescribeAcls(
+                client,
+                acl_binding_filter.ptr(),
+                opts.0.ptr(),
+                self.queue.ptr(),
+            );
+        }
+
+        acls::handle_describe_acls_result(rx).await
     }
 
     pub fn blocking_metadata<T>(&self, timeout: T) -> Result<Metadata>
@@ -404,12 +561,6 @@ where
 {
     fn as_c_array(&self) -> *mut *mut T {
         self.as_ptr() as *mut *mut T
-    }
-}
-
-impl From<String> for NewTopic {
-    fn from(name: String) -> Self {
-        NewTopic::builder().name(name).build()
     }
 }
 

@@ -108,6 +108,8 @@ impl NativeClientConfig {
 
 /// Generic Kafka client configuration.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(::serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
 pub struct ClientConfig {
     inner: HashMap<String, String>,
 }

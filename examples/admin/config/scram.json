@@ -1,0 +1,9 @@
+{
+    "bootstrap.servers": "localhost:9093",
+    "security.protocol": "SASL_SSL",
+    "sasl.mechanism": "SCRAM-SHA-512",
+    "sasl.username": "admin",
+    "sasl.password": "password",
+    "debug": "all",
+    "log_level": "7"
+}

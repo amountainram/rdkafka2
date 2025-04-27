@@ -2,7 +2,10 @@ use backon::{ConstantBuilder, RetryableWithContext};
 use rand::{Rng, distr::Alphanumeric};
 use rdkafka2::{
     KafkaError, RDKafkaLogLevel,
-    client::{AdminClient, Cluster, DefaultClientContext, Node, PartitionMetadata, TopicMetadata},
+    client::{
+        AdminClient, Cluster, DefaultClientContext, Node, PartitionMetadata, ResourceTypeRequest,
+        TopicMetadata,
+    },
     config::ClientConfig,
 };
 use rdkafka2_sys::RDKafkaErrorCode;
@@ -24,21 +27,11 @@ fn topic_names() -> Vec<String> {
 
 fn kafka_host() -> &'static str {
     const LOCALHOST_HOST: &str = "localhost";
-    //const DEFAULT_CI_DOCKER_HOST: &str = "docker";
-
-    //env::var("CI")
-    //    .map(|_| DEFAULT_CI_DOCKER_HOST)
-    //    .unwrap_or(LOCALHOST_HOST)
     LOCALHOST_HOST
 }
 
 fn kafka_broker() -> &'static str {
     const LOCALHOST_BROKER: &str = "localhost:9092";
-    //const DEFAULT_CI_DOCKER_BROKER: &str = "docker:9092";
-
-    //env::var("CI")
-    //    .map(|_| DEFAULT_CI_DOCKER_BROKER)
-    //    .unwrap_or(LOCALHOST_BROKER)
     LOCALHOST_BROKER
 }
 
@@ -114,6 +107,25 @@ async fn create_and_delete_topics(#[case] config: ClientConfig, topic_names: Vec
         error.unwrap(),
         KafkaError::MetadataFetch(RDKafkaErrorCode::UnknownTopicOrPartition)
     );
+}
+
+#[rstest]
+#[case(
+    ClientConfig::from_iter([
+        ("bootstrap.servers", kafka_broker()),
+        ("log_level", "7"),
+        ("debug", "all"),
+    ])
+)]
+#[tokio::test(flavor = "current_thread")]
+async fn retrieve_configs(#[case] config: ClientConfig) {
+    let admin_client = test_admin_client(config);
+    let resource = admin_client
+        .describe_resource("1", ResourceTypeRequest::Broker, Default::default())
+        .await
+        .expect("topics to be created");
+
+    println!("Resource: {:?}", resource);
 }
 
 #[rstest]
