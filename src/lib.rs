@@ -1,6 +1,7 @@
 pub use error::{KafkaError, Result};
 pub use log::RDKafkaLogLevel;
 pub use ptr::IntoOpaque;
+pub use rdkafka2_sys::bindings;
 pub use util::{Shutdown, Timeout, rdkafka_version};
 
 pub mod client;

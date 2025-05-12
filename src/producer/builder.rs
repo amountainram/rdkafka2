@@ -1,7 +1,4 @@
-use super::{
-    ProducerContext,
-    boxed::{DefaultProducerContext, Producer},
-};
+use super::{DefaultProducerContext, Producer, ProducerContext};
 use crate::{config::ClientConfig, error::Result, log::RDKafkaLogLevel};
 use futures::{FutureExt, future::BoxFuture};
 use std::{marker::PhantomData, sync::Arc};

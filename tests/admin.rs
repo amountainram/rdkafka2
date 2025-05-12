@@ -1,8 +1,11 @@
 use backon::{ConstantBuilder, RetryableWithContext};
 use rand::{Rng, distr::Alphanumeric};
 use rdkafka2::{
-    KafkaError, RDKafkaLogLevel,
-    client::{AdminClient, Cluster, DefaultClientContext, Node, PartitionMetadata, TopicMetadata},
+    KafkaError, RDKafkaLogLevel, Timeout,
+    client::{
+        AclBinding, AclBindingFilter, AdminClient, Cluster, DefaultClientContext, Node,
+        PartitionMetadata, ResourceType, ResourceTypeRequest, TopicMetadata,
+    },
     config::ClientConfig,
 };
 use rdkafka2_sys::RDKafkaErrorCode;
@@ -24,21 +27,11 @@ fn topic_names() -> Vec<String> {
 
 fn kafka_host() -> &'static str {
     const LOCALHOST_HOST: &str = "localhost";
-    //const DEFAULT_CI_DOCKER_HOST: &str = "docker";
-
-    //env::var("CI")
-    //    .map(|_| DEFAULT_CI_DOCKER_HOST)
-    //    .unwrap_or(LOCALHOST_HOST)
     LOCALHOST_HOST
 }
 
 fn kafka_broker() -> &'static str {
     const LOCALHOST_BROKER: &str = "localhost:9092";
-    //const DEFAULT_CI_DOCKER_BROKER: &str = "docker:9092";
-
-    //env::var("CI")
-    //    .map(|_| DEFAULT_CI_DOCKER_BROKER)
-    //    .unwrap_or(LOCALHOST_BROKER)
     LOCALHOST_BROKER
 }
 
@@ -51,16 +44,18 @@ fn test_admin_client(config: ClientConfig) -> AdminClient {
         .expect("client to be built")
 }
 
-#[rstest]
-#[case(
+#[fixture]
+fn config() -> ClientConfig {
     ClientConfig::from_iter([
         ("bootstrap.servers", kafka_broker()),
         ("log_level", "7"),
         ("debug", "all"),
     ])
-)]
+}
+
+#[rstest]
 #[tokio::test(flavor = "current_thread")]
-async fn create_and_delete_topics(#[case] config: ClientConfig, topic_names: Vec<String>) {
+async fn create_and_delete_topics(config: ClientConfig, topic_names: Vec<String>) {
     let admin_client = test_admin_client(config);
     admin_client
         .create_topics(topic_names.clone(), Default::default())
@@ -117,15 +112,20 @@ async fn create_and_delete_topics(#[case] config: ClientConfig, topic_names: Vec
 }
 
 #[rstest]
-#[case(
-    ClientConfig::from_iter([
-        ("bootstrap.servers", kafka_broker()),
-        ("log_level", "7"),
-        ("debug", "all"),
-    ])
-)]
 #[tokio::test(flavor = "current_thread")]
-async fn describe_cluster(#[case] config: ClientConfig) {
+async fn retrieve_configs(config: ClientConfig) {
+    let admin_client = test_admin_client(config);
+    let resource = admin_client
+        .describe_resource("1", ResourceTypeRequest::Broker, Default::default())
+        .await
+        .expect("topics to be created");
+
+    println!("Resource: {:?}", resource);
+}
+
+#[rstest]
+#[tokio::test(flavor = "current_thread")]
+async fn describe_cluster(config: ClientConfig) {
     let admin_client = test_admin_client(config);
     let cluster = admin_client
         .describe_cluster(Default::default())
@@ -142,4 +142,88 @@ async fn describe_cluster(#[case] config: ClientConfig) {
             .controller(Node::builder().id(1).host(kafka_host()).port(9092).build())
             .build()
     );
+}
+
+async fn test_acls(client: &AdminClient, expected: Vec<AclBinding>) {
+    let expected_len = expected.len();
+    let (_, res) = (|client: AdminClient| async move {
+        let acls = client
+            .describe_acls(AclBindingFilter::any(), None::<Timeout>)
+            .await
+            .expect("acls to be listed");
+        if acls.len() == expected_len {
+            (client, Ok(acls))
+        } else {
+            (
+                client,
+                Err(KafkaError::AdminOpCreation(
+                    "ACLS expected len not matching".to_string(),
+                )),
+            )
+        }
+    })
+    .retry(ConstantBuilder::default())
+    .context(client.clone())
+    .await;
+
+    assert_eq!(
+        res.expect("acls to be retrieved").into_inner(),
+        expected
+            .into_iter()
+            .map(Ok::<_, KafkaError>)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[rstest]
+#[tokio::test(flavor = "current_thread")]
+async fn acls_crud_ops(config: ClientConfig) {
+    let admin_client = test_admin_client(config);
+
+    test_acls(&admin_client, vec![]).await;
+
+    admin_client
+        .create_acls(
+            vec![
+                AclBinding::builder()
+                    .operation(rdkafka2::client::AclOperation::All)
+                    .host(kafka_host())
+                    .permission_type(rdkafka2::client::AclPermissionType::Allow)
+                    .resource_pattern_type(rdkafka2::client::ResourcePatternType::Prefixed)
+                    .principal("User:admin")
+                    .name("fd")
+                    .resource_type(ResourceType::Topic)
+                    .build(),
+            ],
+            None::<Timeout>,
+        )
+        .await
+        .expect("acl request to be ok")
+        .flatten()
+        .expect("acls to be created");
+
+    let test_topic_acl = vec![
+        AclBinding::builder()
+            .operation(rdkafka2::client::AclOperation::All)
+            .host(kafka_host())
+            .permission_type(rdkafka2::client::AclPermissionType::Allow)
+            .resource_pattern_type(rdkafka2::client::ResourcePatternType::Prefixed)
+            .principal("User:admin")
+            .name("fd")
+            .resource_type(ResourceType::Topic)
+            .build(),
+    ];
+
+    test_acls(&admin_client, test_topic_acl.clone()).await;
+
+    let deleted = admin_client
+        .delete_acls(vec![AclBindingFilter::any()], None::<Timeout>)
+        .await
+        .expect("acls to be deleted")
+        .deep_flatten()
+        .expect("acls to be recovered");
+
+    test_acls(&admin_client, vec![]).await;
+
+    assert_eq!(deleted, test_topic_acl);
 }

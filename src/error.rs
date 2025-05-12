@@ -67,6 +67,11 @@ pub enum KafkaError {
     MockCluster(RDKafkaErrorCode),
 
     UnknownEvent(i32),
+    UnknownResource(i32),
+    UnknownAclOperation(i32),
+    UnknownAclResourcePatternType(i32),
+    UnknownAclPermissionType(i32),
+    SaslOauthbearerConfig(RDKafkaErrorCode),
     InvalidEvent {
         actual: RDKafkaEventType,
         expected: RDKafkaEventType,
