@@ -164,14 +164,20 @@ impl NewTopic {
         // NativeNewTopic's Drop implementation if replica assignment or config
         // installation fails.
         let topic = unsafe {
-            NativeNewTopic::from_ptr(rdkafka2_sys::rd_kafka_NewTopic_new(
+            rdkafka2_sys::rd_kafka_NewTopic_new(
                 name.as_ptr(),
                 self.num_partitions,
                 repl,
                 err_buf.as_mut_ptr(),
                 err_buf.capacity(),
-            ))
+            )
         };
+
+        if topic.is_null() {
+            return Err(KafkaError::AdminOpCreation(err_buf.to_string()));
+        }
+
+        let topic = unsafe { NativeNewTopic::from_ptr(topic) };
 
         if let TopicReplication::Variable(assignment) = &self.replication {
             for (partition_id, broker_ids) in assignment.iter().enumerate() {

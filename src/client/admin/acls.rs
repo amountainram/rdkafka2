@@ -11,8 +11,12 @@ use rdkafka2_sys::{
     rd_kafka_AclBinding_principal, rd_kafka_AclBinding_resource_pattern_type,
     rd_kafka_AclBinding_restype, rd_kafka_AclBinding_t, rd_kafka_AclBindingFilter_t,
     rd_kafka_AclOperation_t, rd_kafka_AclPermissionType_t, rd_kafka_ConfigResource_t,
+    rd_kafka_CreateAcls_result_acls, rd_kafka_DeleteAcls_result_response_error,
+    rd_kafka_DeleteAcls_result_response_matching_acls, rd_kafka_DeleteAcls_result_responses,
     rd_kafka_DescribeAcls_result_acls, rd_kafka_ResourcePatternType_t, rd_kafka_ResourceType_t,
-    rd_kafka_error_code, rd_kafka_event_DescribeAcls_result, rd_kafka_event_error,
+    rd_kafka_acl_result_error, rd_kafka_acl_result_t, rd_kafka_error_code,
+    rd_kafka_event_CreateAcls_result, rd_kafka_event_DeleteAcls_result,
+    rd_kafka_event_DescribeAcls_result, rd_kafka_event_error,
 };
 use std::{ffi::CString, mem::ManuallyDrop};
 use tokio::sync::oneshot;
@@ -38,6 +42,19 @@ pub enum ResourceType {
     Group = rd_kafka_ResourceType_t::RD_KAFKA_RESOURCE_GROUP as i32,
     Broker = rd_kafka_ResourceType_t::RD_KAFKA_RESOURCE_BROKER as i32,
     TransactionalId = rd_kafka_ResourceType_t::RD_KAFKA_RESOURCE_TRANSACTIONAL_ID as i32,
+}
+
+impl From<ResourceType> for rd_kafka_ResourceType_t {
+    fn from(value: ResourceType) -> Self {
+        match value {
+            ResourceType::Topic => rd_kafka_ResourceType_t::RD_KAFKA_RESOURCE_TOPIC,
+            ResourceType::Group => rd_kafka_ResourceType_t::RD_KAFKA_RESOURCE_GROUP,
+            ResourceType::Broker => rd_kafka_ResourceType_t::RD_KAFKA_RESOURCE_BROKER,
+            ResourceType::TransactionalId => {
+                rd_kafka_ResourceType_t::RD_KAFKA_RESOURCE_TRANSACTIONAL_ID
+            }
+        }
+    }
 }
 
 impl From<ResourceType> for ResourceTypeRequest {
@@ -138,6 +155,32 @@ pub enum AclOperation {
     IdempotentWrite = rd_kafka_AclOperation_t::RD_KAFKA_ACL_OPERATION_IDEMPOTENT_WRITE as u32,
 }
 
+impl From<AclOperation> for rd_kafka_AclOperation_t {
+    fn from(value: AclOperation) -> Self {
+        match value {
+            AclOperation::All => rd_kafka_AclOperation_t::RD_KAFKA_ACL_OPERATION_ALL,
+            AclOperation::Read => rd_kafka_AclOperation_t::RD_KAFKA_ACL_OPERATION_READ,
+            AclOperation::Write => rd_kafka_AclOperation_t::RD_KAFKA_ACL_OPERATION_WRITE,
+            AclOperation::Create => rd_kafka_AclOperation_t::RD_KAFKA_ACL_OPERATION_CREATE,
+            AclOperation::Delete => rd_kafka_AclOperation_t::RD_KAFKA_ACL_OPERATION_DELETE,
+            AclOperation::Alter => rd_kafka_AclOperation_t::RD_KAFKA_ACL_OPERATION_ALTER,
+            AclOperation::Describe => rd_kafka_AclOperation_t::RD_KAFKA_ACL_OPERATION_DESCRIBE,
+            AclOperation::ClusterAction => {
+                rd_kafka_AclOperation_t::RD_KAFKA_ACL_OPERATION_CLUSTER_ACTION
+            }
+            AclOperation::DescribeConfigs => {
+                rd_kafka_AclOperation_t::RD_KAFKA_ACL_OPERATION_DESCRIBE_CONFIGS
+            }
+            AclOperation::AlterConfigs => {
+                rd_kafka_AclOperation_t::RD_KAFKA_ACL_OPERATION_ALTER_CONFIGS
+            }
+            AclOperation::IdempotentWrite => {
+                rd_kafka_AclOperation_t::RD_KAFKA_ACL_OPERATION_IDEMPOTENT_WRITE
+            }
+        }
+    }
+}
+
 impl From<AclOperationRequest> for rd_kafka_AclOperation_t {
     fn from(value: AclOperationRequest) -> Self {
         match value {
@@ -213,18 +256,28 @@ pub enum ResourcePatternTypeRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum ResourcePatternType {
-    /// Match: will perform pattern matching
-    Match = rd_kafka_ResourcePatternType_t::RD_KAFKA_RESOURCE_PATTERN_MATCH as u32,
     /// Literal: A literal resource name
     Literal = rd_kafka_ResourcePatternType_t::RD_KAFKA_RESOURCE_PATTERN_LITERAL as u32,
     /// Prefixed: A prefixed resource name
     Prefixed = rd_kafka_ResourcePatternType_t::RD_KAFKA_RESOURCE_PATTERN_PREFIXED as u32,
 }
 
+impl From<ResourcePatternType> for rd_kafka_ResourcePatternType_t {
+    fn from(value: ResourcePatternType) -> Self {
+        match value {
+            ResourcePatternType::Literal => {
+                rd_kafka_ResourcePatternType_t::RD_KAFKA_RESOURCE_PATTERN_LITERAL
+            }
+            ResourcePatternType::Prefixed => {
+                rd_kafka_ResourcePatternType_t::RD_KAFKA_RESOURCE_PATTERN_PREFIXED
+            }
+        }
+    }
+}
+
 impl From<ResourcePatternType> for ResourcePatternTypeRequest {
     fn from(value: ResourcePatternType) -> Self {
         match value {
-            ResourcePatternType::Match => ResourcePatternTypeRequest::Match,
             ResourcePatternType::Literal => ResourcePatternTypeRequest::Literal,
             ResourcePatternType::Prefixed => ResourcePatternTypeRequest::Prefixed,
         }
@@ -255,9 +308,6 @@ impl TryFrom<rd_kafka_ResourcePatternType_t> for ResourcePatternType {
 
     fn try_from(value: rd_kafka_ResourcePatternType_t) -> Result<Self, Self::Error> {
         match value {
-            rd_kafka_ResourcePatternType_t::RD_KAFKA_RESOURCE_PATTERN_MATCH => {
-                Ok(ResourcePatternType::Match)
-            }
             rd_kafka_ResourcePatternType_t::RD_KAFKA_RESOURCE_PATTERN_LITERAL => {
                 Ok(ResourcePatternType::Literal)
             }
@@ -285,18 +335,15 @@ pub enum AclPermissionType {
     Deny = rd_kafka_AclPermissionType_t::RD_KAFKA_ACL_PERMISSION_TYPE_DENY as u32,
 }
 
-impl TryFrom<rd_kafka_AclPermissionType_t> for AclPermissionType {
-    type Error = i32;
-
-    fn try_from(value: rd_kafka_AclPermissionType_t) -> Result<Self, Self::Error> {
+impl From<AclPermissionType> for rd_kafka_AclPermissionType_t {
+    fn from(value: AclPermissionType) -> Self {
         match value {
-            rd_kafka_AclPermissionType_t::RD_KAFKA_ACL_PERMISSION_TYPE_ALLOW => {
-                Ok(AclPermissionType::Allow)
+            AclPermissionType::Allow => {
+                rd_kafka_AclPermissionType_t::RD_KAFKA_ACL_PERMISSION_TYPE_ALLOW
             }
-            rd_kafka_AclPermissionType_t::RD_KAFKA_ACL_PERMISSION_TYPE_DENY => {
-                Ok(AclPermissionType::Deny)
+            AclPermissionType::Deny => {
+                rd_kafka_AclPermissionType_t::RD_KAFKA_ACL_PERMISSION_TYPE_DENY
             }
-            _ => Err(value as i32),
         }
     }
 }
@@ -317,6 +364,22 @@ impl From<AclPermissionTypeRequest> for rd_kafka_AclPermissionType_t {
     }
 }
 
+impl TryFrom<rd_kafka_AclPermissionType_t> for AclPermissionType {
+    type Error = i32;
+
+    fn try_from(value: rd_kafka_AclPermissionType_t) -> Result<Self, Self::Error> {
+        match value {
+            rd_kafka_AclPermissionType_t::RD_KAFKA_ACL_PERMISSION_TYPE_ALLOW => {
+                Ok(AclPermissionType::Allow)
+            }
+            rd_kafka_AclPermissionType_t::RD_KAFKA_ACL_PERMISSION_TYPE_DENY => {
+                Ok(AclPermissionType::Deny)
+            }
+            _ => Err(value as i32),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, TypedBuilder)]
 #[builder(field_defaults(default, setter(into, prefix = "filter_by_")))]
 pub struct AclBindingFilter {
@@ -332,28 +395,30 @@ pub struct AclBindingFilter {
     permission_type: AclPermissionTypeRequest,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, TypedBuilder)]
-pub struct AclBinding {
-    pub resource_type: ResourceType,
-    pub name: String,
-    pub resource_pattern_type: ResourcePatternType,
-    pub principal: String,
-    pub host: String,
-    pub operation: AclOperation,
-    pub permission_type: AclPermissionType,
+impl AclBindingFilter {
+    pub fn any() -> Self {
+        Self {
+            resource_type: Default::default(),
+            name: Default::default(),
+            resource_pattern_type: Default::default(),
+            principal: Default::default(),
+            host: Default::default(),
+            operation: Default::default(),
+            permission_type: Default::default(),
+        }
+    }
 }
 
 pub(super) type NativeAclBindingFilter = NativePtr<rd_kafka_AclBindingFilter_t>;
 
 impl AclBindingFilter {
-    pub(super) fn to_native(&self) -> Result<NativeAclBindingFilter> {
-        let mut err_buf = ErrBuf::new();
+    pub(super) fn to_native(&self, err_buf: &mut ErrBuf) -> Result<NativeAclBindingFilter> {
         let mut name = ManuallyDrop::new(self.name.as_deref().map(CString::new).transpose()?);
         let mut principal =
             ManuallyDrop::new(self.principal.as_deref().map(CString::new).transpose()?);
         let mut host = ManuallyDrop::new(self.host.as_deref().map(CString::new).transpose()?);
         let native_acl_binding_filter = unsafe {
-            NativeAclBindingFilter::from_ptr(rdkafka2_sys::rd_kafka_AclBindingFilter_new(
+            rdkafka2_sys::rd_kafka_AclBindingFilter_new(
                 self.resource_type.into(),
                 name.as_ref()
                     .map(|s| s.as_ptr())
@@ -370,7 +435,7 @@ impl AclBindingFilter {
                 self.permission_type.into(),
                 err_buf.as_mut_ptr(),
                 err_buf.capacity(),
-            ))
+            )
         };
 
         unsafe {
@@ -379,8 +444,50 @@ impl AclBindingFilter {
             ManuallyDrop::drop(&mut host);
         }
 
-        (!native_acl_binding_filter.ptr().is_null())
-            .then_some(native_acl_binding_filter)
+        (!native_acl_binding_filter.is_null())
+            .then(|| unsafe { NativeAclBindingFilter::from_ptr(native_acl_binding_filter) })
+            .ok_or(KafkaError::AdminOpCreation(err_buf.to_string()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, TypedBuilder)]
+pub struct AclBinding {
+    pub resource_type: ResourceType,
+    #[builder(setter(into))]
+    pub name: String,
+    pub resource_pattern_type: ResourcePatternType,
+    #[builder(setter(into))]
+    pub principal: String,
+    #[builder(setter(into))]
+    pub host: String,
+    pub operation: AclOperation,
+    pub permission_type: AclPermissionType,
+}
+
+pub(super) type NativeAclBinding = NativePtr<rd_kafka_AclBinding_t>;
+
+impl AclBinding {
+    pub(super) fn to_native(&self, err_buf: &mut ErrBuf) -> Result<NativeAclBinding> {
+        let native_acl_binding = unsafe {
+            let name = CString::new(self.name.as_str())?;
+            let pricipal = CString::new(self.principal.as_str())?;
+            let host = CString::new(self.host.as_str())?;
+
+            rdkafka2_sys::rd_kafka_AclBinding_new(
+                self.resource_type.into(),
+                name.as_ptr(),
+                self.resource_pattern_type.into(),
+                pricipal.as_ptr(),
+                host.as_ptr(),
+                self.operation.into(),
+                self.permission_type.into(),
+                err_buf.as_mut_ptr(),
+                err_buf.capacity(),
+            )
+        };
+
+        (!native_acl_binding.is_null())
+            .then(|| unsafe { NativeAclBinding::from_ptr(native_acl_binding) })
             .ok_or(KafkaError::AdminOpCreation(err_buf.to_string()))
     }
 }
@@ -444,6 +551,104 @@ pub(super) async fn handle_describe_acls_result(
                 })
                 .ok_or_else(|| {
                     KafkaError::AdminOpCreation("error while creating ACL descriptions".to_string())
+                })
+        })
+        .await
+}
+
+fn build_acl_results(acls: *const *const rd_kafka_acl_result_t, n: usize) -> Vec<Result<()>> {
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let acl = unsafe { *acls.add(i) };
+        let err = unsafe { rd_kafka_error_code(rd_kafka_acl_result_error(acl)) };
+        if let Some(err) = RDKafkaErrorCode::from(err).error() {
+            out.push(Err(KafkaError::AdminOp(err)));
+        } else {
+            out.push(Ok(()));
+        }
+    }
+
+    out
+}
+
+pub(super) async fn handle_create_acls_result(
+    rx: oneshot::Receiver<NativeEvent>,
+) -> Result<Vec<Result<()>>> {
+    rx.map_err(|_| KafkaError::AdminApiError)
+        .and_then(and_then_event(RDKafkaEventType::CreateAclsResult))
+        .and_then(|(_, evt)| async move {
+            unsafe {
+                println!("{:?}", rd_kafka_event_error(evt.0.ptr()));
+                if let Some(err) = RDKafkaErrorCode::from(rd_kafka_event_error(evt.0.ptr())).error()
+                {
+                    return Err(KafkaError::AdminOp(err));
+                }
+            }
+
+            let res = unsafe { rd_kafka_event_CreateAcls_result(evt.0.ptr()) };
+
+            (!res.is_null())
+                .then(|| unsafe {
+                    let mut n = 0;
+                    let native_acl_results = rd_kafka_CreateAcls_result_acls(res, &mut n);
+                    build_acl_results(native_acl_results, n)
+                })
+                .ok_or_else(|| {
+                    KafkaError::AdminOpCreation("error while creating ACL rules".to_string())
+                })
+        })
+        .await
+}
+
+pub(super) async fn handle_delete_acls_result(
+    rx: oneshot::Receiver<NativeEvent>,
+) -> Result<Vec<Result<Vec<Result<AclBinding>>>>> {
+    rx.map_err(|_| KafkaError::AdminApiError)
+        .and_then(and_then_event(RDKafkaEventType::DeleteAclsResult))
+        .and_then(|(_, evt)| async move {
+            unsafe {
+                println!("{:?}", rd_kafka_event_error(evt.0.ptr()));
+                if let Some(err) = RDKafkaErrorCode::from(rd_kafka_event_error(evt.0.ptr())).error()
+                {
+                    return Err(KafkaError::AdminOp(err));
+                }
+            }
+
+            let res = unsafe { rd_kafka_event_DeleteAcls_result(evt.0.ptr()) };
+
+            (!res.is_null())
+                .then(|| unsafe {
+                    let mut n = 0;
+                    let native_acl_binding_responses =
+                        rd_kafka_DeleteAcls_result_responses(res, &mut n);
+                    let mut acl_bindings = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let native_acl_binding_response = *native_acl_binding_responses.add(i);
+                        let ret = RDKafkaErrorCode::from(rd_kafka_error_code(
+                            rd_kafka_DeleteAcls_result_response_error(native_acl_binding_response),
+                        ));
+                        if let Some(err) = ret.error() {
+                            acl_bindings.push(Err(KafkaError::AdminOp(err)));
+                        } else {
+                            let mut m = 0;
+                            let native_acl_bindings =
+                                rd_kafka_DeleteAcls_result_response_matching_acls(
+                                    native_acl_binding_response,
+                                    &mut m,
+                                );
+                            let mut acl_bindings_part = Vec::with_capacity(m);
+                            for j in 0..m {
+                                let native_acl_binding = *native_acl_bindings.add(j);
+                                acl_bindings_part.push(build_acl_binding(native_acl_binding));
+                            }
+                            acl_bindings.push(Ok(acl_bindings_part));
+                        }
+                    }
+
+                    acl_bindings
+                })
+                .ok_or_else(|| {
+                    KafkaError::AdminOpCreation("error while creating ACL rules".to_string())
                 })
         })
         .await

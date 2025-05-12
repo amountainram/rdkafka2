@@ -159,6 +159,40 @@ impl From<Duration> for Timeout {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrayOfResults<T> {
+    pub(crate) inner: Vec<Result<T>>,
+}
+
+impl<T> ArrayOfResults<T> {
+    pub fn into_inner(self) -> Vec<Result<T>> {
+        let ArrayOfResults { inner } = self;
+        inner
+    }
+
+    pub fn flatten(self) -> Result<Vec<T>> {
+        let ArrayOfResults { inner } = self;
+        inner.into_iter().collect()
+    }
+}
+
+impl<T> ArrayOfResults<T> {
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+}
+
+impl<T> ArrayOfResults<ArrayOfResults<T>> {
+    pub fn deep_flatten(self) -> Result<Vec<T>> {
+        Ok(self
+            .flatten()?
+            .into_iter()
+            .flat_map(|x| x.flatten())
+            .flatten()
+            .collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

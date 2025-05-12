@@ -2,7 +2,7 @@
 script = '''
     docker_args="--file .dev/docker-compose.yml"
     ./.dev/ssl_init.sh;
-    docker compose ${docker_args} up -d --wait kafka-scram kafka-oauthbearer;
+    docker compose ${docker_args} up -d --wait kafka-scram; #kafka-oauthbearer;
     docker compose ${docker_args} exec kafka-scram bash /opt/kafka/bin/scram_init.sh;
     docker compose ${docker_args} up -d --wait kafka-ui;
 '''

@@ -86,8 +86,8 @@ unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_ConfigResource_t {
     const DROP: unsafe extern "C" fn(*mut Self) = rd_kafka_ConfigResource_destroy;
 }
 
-unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_AclBindingFilter_t {
-    const TYPE: &'static str = "rd_kafka_AclBindingFilter_t";
+unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_AclBinding_t {
+    const TYPE: &'static str = "rd_kafka_AclBinding_t";
     const DROP: unsafe extern "C" fn(*mut Self) = rd_kafka_AclBinding_destroy;
 }
 

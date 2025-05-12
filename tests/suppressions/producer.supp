@@ -11,7 +11,7 @@
    fun:_ZN4test7console17run_tests_console17h66d7631ce2a8b405E
    fun:_ZN4test9test_main17hf3220c03cfb0aab4E
    fun:_ZN4test16test_main_static17h2f392f537f23ba0dE
-   fun:_ZN3std3sys9backtrace28__rust_begin_short_backtrace17h2074ce3aebed6f73E
-   fun:_ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17hed94299107d4c664E.llvm.382582797045377266
+   fun:_ZN3std3sys9backtrace28__rust_begin_short_backtrace17hd4c6b11a5a602835E
+   fun:_ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17h6d0379b3ad15ec6dE.llvm.817902729929325603
    fun:_ZN3std2rt19lang_start_internal17h15895544e2012228E
 }

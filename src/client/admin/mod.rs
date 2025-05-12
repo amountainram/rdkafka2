@@ -5,7 +5,7 @@ use crate::{
     error::Result,
     ptr::{KafkaDrop, NativePtr},
     topic::{DeleteTopic, NewTopic, Topic},
-    util::{ErrBuf, check_rdkafka_invalid_arg, cstr_to_owned},
+    util::{ArrayOfResults, ErrBuf, check_rdkafka_invalid_arg},
 };
 pub use acls::*;
 pub use cluster::*;
@@ -15,11 +15,7 @@ use rdkafka2_sys::{
     RDKafkaErrorCode, RDKafkaEventType, RDKafkaType, rd_kafka_AdminOptions_t, rd_kafka_admin_op_t,
     rd_kafka_event_t, rd_kafka_metadata_t, rd_kafka_queue_t, rd_kafka_t,
 };
-use std::{
-    ffi::{CString, c_char, c_void},
-    ptr,
-    sync::Arc,
-};
+use std::{ffi::c_void, sync::Arc};
 use tokio::sync::oneshot;
 use topics::TopicResult;
 
@@ -52,11 +48,15 @@ impl AdminOptions {
         client: *mut rd_kafka_t,
         err_buf: &mut ErrBuf,
     ) -> Result<(NativeAdminOptions, oneshot::Receiver<NativeEvent>)> {
-        let native_opts = unsafe {
-            NativeAdminOptions(NativePtr::from_ptr(
-                rdkafka2_sys::rd_kafka_AdminOptions_new(client, op),
-            ))
-        };
+        let native_opts = unsafe { rdkafka2_sys::rd_kafka_AdminOptions_new(client, op) };
+
+        if native_opts.is_null() {
+            return Err(KafkaError::AdminOpCreation(
+                "unknown operation type".to_string(),
+            ));
+        }
+
+        let native_opts = NativeAdminOptions(unsafe { NativePtr::from_ptr(native_opts) });
 
         if let Some(timeout) = self.request_timeout {
             let res = unsafe {
@@ -154,6 +154,8 @@ where
                 RDKafkaEventType::CreateTopicsResult
                 | RDKafkaEventType::DeleteTopicsResult
                 | RDKafkaEventType::DescribeAclsResult
+                | RDKafkaEventType::CreateAclsResult
+                | RDKafkaEventType::DeleteAclsResult
                 | RDKafkaEventType::DescribeClusterResult
                 | RDKafkaEventType::DescribeConfigsResult => {
                     let tx = unsafe {
@@ -176,45 +178,9 @@ where
         log_level: Option<RDKafkaLogLevel>,
     ) -> Result<Self> {
         unsafe {
-            // extern "C" copies the value of the [`delivery_opaque_ptr`]
             rdkafka2_sys::rd_kafka_conf_set_background_event_cb(
                 native_config.ptr(),
                 Some(Self::admin_event_cb),
-            );
-            rdkafka2_sys::rd_kafka_conf_enable_sasl_queue(native_config.ptr(), 1);
-            unsafe extern "C" fn oauthbearer_token_refresh_cb(
-                rk: *mut rd_kafka_t,
-                oauthbearer_config: *const c_char,
-                _opaque: *mut c_void,
-            ) {
-                // This is a no-op for now
-
-                info!("oauthbearer_token_refresh_cb called {}", unsafe {
-                    cstr_to_owned(oauthbearer_config)
-                });
-                unsafe {
-                    let mut err_buf = ErrBuf::new();
-                    let token_value = CString::new("").unwrap();
-                    let principal = CString::new("admin").unwrap();
-                    let resp = rdkafka2_sys::rd_kafka_oauthbearer_set_token(
-                        rk,
-                        token_value.as_ptr(),
-                        86400000,
-                        principal.as_ptr(),
-                        ptr::null_mut(),
-                        0,
-                        err_buf.as_mut_ptr(),
-                        err_buf.capacity(),
-                    );
-                    if let Some(err) = RDKafkaErrorCode::from(resp).error() {
-                        error!("oauthbearer_token_refresh_cb failed: {}", err);
-                    }
-                }
-            }
-
-            rdkafka2_sys::rd_kafka_conf_set_oauthbearer_token_refresh_cb(
-                native_config.ptr(),
-                Some(oauthbearer_token_refresh_cb),
             );
         }
 
@@ -225,15 +191,6 @@ where
             .rd_type(RDKafkaType::Producer)
             .context(context)
             .try_build()?;
-
-        //unsafe {
-        //    let err = rdkafka2_sys::rd_kafka_error_code(
-        //        rdkafka2_sys::rd_kafka_sasl_background_callbacks_enable(native_client.native_ptr()),
-        //    );
-        //    if let Some(err) = RDKafkaErrorCode::from(err).error() {
-        //        return Err(KafkaError::SaslOauthbearerConfig(err));
-        //    }
-        //}
 
         let admin_client = Self {
             queue: unsafe {
@@ -409,17 +366,18 @@ impl<C> AdminClient<C> {
     pub async fn describe_acls<T>(
         &self,
         acl_binding_filter: AclBindingFilter,
-        timeout: T,
-    ) -> Result<Vec<Result<AclBinding>>>
+        timeout: Option<T>,
+    ) -> Result<ArrayOfResults<AclBinding>>
     where
         T: Into<Timeout>,
     {
-        let client = self.inner.native_ptr();
-        let acl_binding_filter = acl_binding_filter.to_native()?;
-
         let mut err_buf = ErrBuf::new();
+
+        let client = self.inner.native_ptr();
+        let acl_binding_filter = acl_binding_filter.to_native(&mut err_buf)?;
+
         let opts = AdminOptions {
-            request_timeout: Some(timeout.into()),
+            request_timeout: timeout.map(Into::into),
             ..Default::default()
         };
         let (opts, rx) = opts.to_native(
@@ -437,7 +395,107 @@ impl<C> AdminClient<C> {
             );
         }
 
-        acls::handle_describe_acls_result(rx).await
+        Ok(ArrayOfResults {
+            inner: acls::handle_describe_acls_result(rx).await?,
+        })
+    }
+
+    pub async fn create_acls<I, T>(
+        &self,
+        acl_bindings: I,
+        timeout: Option<T>,
+    ) -> Result<ArrayOfResults<()>>
+    where
+        I: IntoIterator,
+        I::Item: Into<AclBinding>,
+        T: Into<Timeout>,
+    {
+        let client = self.inner.native_ptr();
+        let (acl_bindings, mut err_buf) =
+            acl_bindings.into_iter().map(Ok::<_, KafkaError>).try_fold(
+                (vec![], ErrBuf::new()),
+                |(mut acl_binding, mut err_buf), next| {
+                    err_buf.clear();
+                    acl_binding.push(next?.into().to_native(&mut err_buf)?);
+                    Ok::<_, KafkaError>((acl_binding, err_buf))
+                },
+            )?;
+
+        let opts = AdminOptions {
+            request_timeout: timeout.map(Into::into),
+            ..Default::default()
+        };
+        let (opts, rx) = opts.to_native(
+            rd_kafka_admin_op_t::RD_KAFKA_ADMIN_OP_CREATEACLS,
+            client,
+            &mut err_buf,
+        )?;
+
+        unsafe {
+            rdkafka2_sys::rd_kafka_CreateAcls(
+                client,
+                acl_bindings.as_c_array(),
+                acl_bindings.len(),
+                opts.0.ptr(),
+                self.queue.ptr(),
+            );
+        }
+
+        Ok(ArrayOfResults {
+            inner: acls::handle_create_acls_result(rx).await?,
+        })
+    }
+
+    pub async fn delete_acls<I, T>(
+        &self,
+        acl_binding_filters: I,
+        timeout: Option<T>,
+    ) -> Result<ArrayOfResults<ArrayOfResults<AclBinding>>>
+    where
+        I: IntoIterator,
+        I::Item: Into<AclBindingFilter>,
+        T: Into<Timeout>,
+    {
+        let client = self.inner.native_ptr();
+        let (acl_bindings, mut err_buf) = acl_binding_filters
+            .into_iter()
+            .map(Ok::<_, KafkaError>)
+            .try_fold(
+                (vec![], ErrBuf::new()),
+                |(mut acl_binding, mut err_buf), next| {
+                    err_buf.clear();
+                    acl_binding.push(next?.into().to_native(&mut err_buf)?);
+                    Ok::<_, KafkaError>((acl_binding, err_buf))
+                },
+            )?;
+
+        let opts = AdminOptions {
+            request_timeout: timeout.map(Into::into),
+            ..Default::default()
+        };
+        let (opts, rx) = opts.to_native(
+            rd_kafka_admin_op_t::RD_KAFKA_ADMIN_OP_DELETEACLS,
+            client,
+            &mut err_buf,
+        )?;
+
+        unsafe {
+            rdkafka2_sys::rd_kafka_DeleteAcls(
+                client,
+                acl_bindings.as_c_array(),
+                acl_bindings.len(),
+                opts.0.ptr(),
+                self.queue.ptr(),
+            );
+        }
+
+        Ok(ArrayOfResults {
+            inner: acls::handle_delete_acls_result(rx)
+                .await?
+                .into_iter()
+                .map(|x| x.map(|x| ArrayOfResults { inner: x }))
+                .collect(),
+        })
     }
 
     pub fn blocking_metadata<T>(&self, timeout: T) -> Result<Metadata>

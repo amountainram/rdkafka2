@@ -76,7 +76,7 @@ async fn main() {
                     //.filter_by_operation(AclOperationRequest::All)
                     .filter_by_permission_type(AclPermissionTypeRequest::Allow)
                     .build(),
-                Duration::from_secs(5)
+                Duration::from_secs(5).into()
             )
             .await
     );
