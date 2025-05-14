@@ -33,66 +33,25 @@ command = "docker"
 args = ["compose", "--file", "tests/docker-compose.yml", "down"]
 
 [tasks.e2e_tests]
-script = '''
-    #!/bin/bash
-
-    set -e;
-
-    source ${TEST_E2E_OUTPUT};
-
-    cargo_args="--no-run --features=sasl,ssl --release --message-format=json"
-    executables=$(cargo test --tests $cargo_args \
-        | jq -r 'select(.reason == "compiler-artifact" and .profile.test == true) | .executable' \
-        | grep -v null \
-        | grep -v '/rdkafka2-')
-    echo "executables=$executables" >> ${TEST_E2E_OUTPUT};
-
-    valgrind_args="--leak-check=full --gen-suppressions=all"
-
-    for exe in $executables; do
-        echo "Running Valgrind on $exe with params $valgrind_args"
-        test_name=$(basename "$exe" | sed -r 's/-([^-]+)$//');
-        valgrind $valgrind_args --log-file=/tmp/${test_name}.valgrind.log "$exe" --test-threads=1;
-        cat /tmp/${test_name}.valgrind.log | sed -e "s/<insert_a_suppression_name_here>/${test_name}/" | ./tests/suppressions.sh > $supp_dir/${test_name}.supp;
-    done
-'''
+script.file = "tests/scripts/e2e_tests.sh"
 
 [tasks.e2e_tests_env]
 script = '''
     rm ${TEST_E2E_OUTPUT} || true;
+
     rdkafka2_e2e_home=/tmp/rdkafka2_e2e_tests;
+    log_dir=${rdkafka2_e2e_home}/log;
     supp_dir=${rdkafka2_e2e_home}/suppressions;
-    mkdir -p ${supp_dir};
+    mkdir -p $log_dir;
+    mkdir -p $supp_dir;
+
     echo "rdkafka2_e2e_home=${rdkafka2_e2e_home}" >> ${TEST_E2E_OUTPUT};
+    echo "log_dir=${log_dir}" >> ${TEST_E2E_OUTPUT};
     echo "supp_dir=${supp_dir}" >> ${TEST_E2E_OUTPUT};
 '''
 
 [tasks.e2e_tests_valgrind_check]
-script = '''
-    #!/bin/bash
-
-    set -e
-    
-    source ${TEST_E2E_OUTPUT};
-
-    for exe in $executables; do
-        test_name=$(basename "$exe" | sed -r 's/-([^-]+)$//');
-        supp_file="${supp_dir}/${test_name}.supp";
-        demangled_supp_file="$supp_dir/${test_name}.demangled.supp";
-        cat ${supp_file} | rustfilt > $demangled_supp_file;
-
-        if ! cmp -s "$demangled_supp_file" "./tests/suppressions/${test_name}.demangled.supp"; then
-            echo "Valgrind suppression for $test_name has changed."
-            echo "actual:"
-            cat "$demangled_supp_file"
-            echo
-            echo "-------------------------"
-            echo "expected:"
-            cat "./tests/suppressions/${test_name}.demangled.supp"
-            exit 1
-        fi
-    done
-'''
+script.file = "tests/scripts/e2e_tests_valgrind_check.sh"
 
 [tasks.e2e]
 env = { "TEST_E2E_OUTPUT" = "/tmp/rdkafka2_e2e_tests/.env" }
@@ -108,27 +67,16 @@ run_task = { name = [
 [tasks.e2e_tests_update_env]
 script = '''
     rm ${TEST_E2E_OUTPUT} || true;
+
     rdkafka2_e2e_home=$(pwd)/tests;
+    log_dir=/tmp/rdkafka2_e2e_tests;
     supp_dir=${rdkafka2_e2e_home}/suppressions;
+    mkdir -p ${log_dir};
     mkdir -p ${supp_dir};
+
     echo "rdkafka2_e2e_home=${rdkafka2_e2e_home}" >> ${TEST_E2E_OUTPUT};
+    echo "log_dir=${log_dir}" >> ${TEST_E2E_OUTPUT};
     echo "supp_dir=${supp_dir}" >> ${TEST_E2E_OUTPUT};
-'''
-
-[tasks.e2e_tests_update_store]
-script = '''
-    #!/bin/bash
-
-    set -e
-    
-    source ${TEST_E2E_OUTPUT};
-
-    for exe in $executables; do
-        test_name=$(basename "$exe" | sed -r 's/-([^-]+)$//');
-        supp_file="${supp_dir}/${test_name}.supp";
-        demangled_supp_file="${supp_dir}/${test_name}.demangled.supp";
-        cat ${supp_file} | rustfilt > $demangled_supp_file;
-    done
 '''
 
 [tasks.e2e_update]
@@ -137,5 +85,4 @@ dependencies = ["setup_tests"]
 run_task = { name = [
     "e2e_tests_update_env",
     "e2e_tests",
-    "e2e_tests_update_store",
 ], fork = true, cleanup_task = "teardown_tests" }

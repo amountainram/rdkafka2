@@ -1,4 +1,4 @@
-use crate::{IntoOpaque, error::KafkaError, ptr::NativePtr, util};
+use crate::{client::Topic, error::KafkaError, ptr::NativePtr, util};
 use rdkafka2_sys::{RDKafkaErrorCode, rd_kafka_headers_t, rd_kafka_message_t};
 use std::{ffi::CStr, marker::PhantomData, str::Utf8Error};
 use typed_builder::TypedBuilder;
@@ -187,17 +187,51 @@ impl<'a> BorrowedMessage<'a> {
 }
 
 #[derive(Debug, TypedBuilder)]
-pub struct BaseRecord<'a, D: IntoOpaque + Default = ()> {
+pub struct OwnedBaseRecord<D = ()>
+where
+    D: Default,
+{
     /// Required destination topic.
-    pub topic: &'a str,
+    #[builder(setter(into))]
+    pub(crate) topic: Topic<D>,
     /// Optional destination partition.
     #[builder(default = rdkafka2_sys::RD_KAFKA_PARTITION_UA)]
     pub partition: i32,
     /// Optional payload.
+    #[builder(default, setter(into))]
+    pub payload: Option<Vec<u8>>,
+    /// Optional key.
+    #[builder(default, setter(into))]
+    pub key: Option<Vec<u8>>,
+    /// Optional timestamp.
+    ///
+    /// Note that Kafka represents timestamps as the number of milliseconds
+    /// since the Unix epoch.
     #[builder(default, setter(strip_option, into))]
+    pub timestamp: Option<i64>,
+    /// Optional message headers.
+    #[builder(default, setter(strip_option))]
+    pub headers: Option<OwnedHeaders>,
+    /// Required delivery opaque (defaults to `()` if not required).
+    #[builder(default)]
+    pub delivery_opaque: D,
+}
+
+#[derive(Debug, TypedBuilder)]
+pub struct BaseRecord<'a, D = ()>
+where
+    D: Default,
+{
+    /// Required destination topic.
+    pub(crate) topic: &'a Topic<D>,
+    /// Optional destination partition.
+    #[builder(default = rdkafka2_sys::RD_KAFKA_PARTITION_UA)]
+    pub partition: i32,
+    /// Optional payload.
+    #[builder(default, setter(into))]
     pub payload: Option<&'a [u8]>,
     /// Optional key.
-    #[builder(default, setter(strip_option, into))]
+    #[builder(default, setter(into))]
     pub key: Option<&'a [u8]>,
     /// Optional timestamp.
     ///
@@ -213,6 +247,23 @@ pub struct BaseRecord<'a, D: IntoOpaque + Default = ()> {
     pub delivery_opaque: D,
 }
 
+impl<D> OwnedBaseRecord<D>
+where
+    D: Default,
+{
+    pub fn as_ref(&self) -> BaseRecord<'_, D> {
+        BaseRecord {
+            topic: &self.topic,
+            partition: self.partition,
+            payload: self.payload.as_deref(),
+            key: self.key.as_deref(),
+            timestamp: self.timestamp,
+            headers: self.headers.clone(),
+            delivery_opaque: Default::default(),
+        }
+    }
+}
+
 /// A Kafka message that owns its backing data.
 ///
 /// An `OwnedMessage` can be created from a [`BorrowedMessage`] using the
@@ -220,9 +271,9 @@ pub struct BaseRecord<'a, D: IntoOpaque + Default = ()> {
 /// to the consumer and don't use any memory inside the consumer buffer.
 #[derive(Debug, Clone, TypedBuilder)]
 pub struct OwnedMessage {
-    #[builder(default)]
+    #[builder(default, setter(into))]
     payload: Option<Vec<u8>>,
-    #[builder(default)]
+    #[builder(default, setter(into, strip_option))]
     key: Option<Vec<u8>>,
     topic: String,
     timestamp: Timestamp,

@@ -4,7 +4,7 @@ use crate::{
 };
 pub use admin::*;
 pub use builders::*;
-pub use native::NativeClient;
+pub use native::{NativeClient, Topic};
 use std::ffi::{c_char, c_int};
 
 mod admin;
@@ -32,8 +32,10 @@ pub trait ClientContext {
     /// which is assumed safe for these arguments.
     ///
     /// ```
+    /// use std::ffi::{c_char, c_int};
+    ///
     /// unsafe extern "C" fn log_cb(
-    ///     _rk: *const rdkafka2_sys::rd_kafka_t,
+    ///     rk: *const rdkafka2_sys::rd_kafka_t,
     ///     level: c_int,
     ///     fac: *const c_char,
     ///     buf: *const c_char,

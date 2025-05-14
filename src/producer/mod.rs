@@ -1,61 +1,23 @@
 use crate::{
     IntoOpaque, RDKafkaLogLevel, Timeout,
-    client::{ClientContext, DefaultClientContext, NativeClient},
+    client::{ClientContext, DefaultClientContext, NativeClient, Topic},
     config::{ClientConfig, NativeClientConfig},
     error::{KafkaError, Result},
     message::{BaseRecord, BorrowedMessage, DeliveryResult, OwnedHeaders},
+    topic::{Partitioner, TopicConf},
 };
 pub use builder::ProducerBuilder;
 use rdkafka2_sys::{
     RDKafkaErrorCode, RDKafkaType,
     bindings::{rd_kafka_message_t, rd_kafka_t},
 };
-use std::{
-    ffi::{CString, c_void},
-    pin::Pin,
-    ptr,
-    sync::Arc,
-    time::Duration,
-};
+use std::{ffi::c_void, pin::Pin, ptr, sync::Arc, time::Duration};
 
 mod builder;
 
 static DEFAULT_PRODUCER_POLL_INTERVAL_MS: u64 = 100;
 
-/// Trait allowing to customize the partitioning of messages.
-pub trait Partitioner {
-    /// Return partition to use for `topic_name`.
-    /// `topic_name` is the name of a topic to which a message is being produced.
-    /// `partition_cnt` is the number of partitions for this topic.
-    /// `key` is an optional key of the message.
-    /// `is_partition_available` is a function that can be called to check if a partition has an active leader broker.
-    ///
-    /// It may be called in any thread at any time,
-    /// It may be called multiple times for the same message/key.
-    /// MUST NOT block or execute for prolonged periods of time.
-    /// MUST return a value between 0 and partition_cnt-1, or the
-    /// special RD_KAFKA_PARTITION_UA value if partitioning could not be performed.
-    /// See documentation for rd_kafka_topic_conf_set_partitioner_cb from librdkafka for more info.
-    fn partition(
-        &self,
-        topic_name: &str,
-        key: Option<&[u8]>,
-        partition_cnt: i32,
-        is_partition_available: impl Fn(i32) -> bool,
-    ) -> i32;
-}
-
-/// Placeholder used when no custom partitioner is needed.
-#[derive(Clone)]
-pub struct NoCustomPartitioner {}
-
-impl Partitioner for NoCustomPartitioner {
-    fn partition(&self, _: &str, _: Option<&[u8]>, _: i32, _: impl Fn(i32) -> bool) -> i32 {
-        unreachable!("NoCustomPartitioner should not be called");
-    }
-}
-
-pub trait ProducerContext<P = NoCustomPartitioner>: ClientContext {
+pub trait ProducerContext: ClientContext {
     /// A `DeliveryOpaque` is a user-defined structure that will be passed to
     /// the producer when producing a message, and returned to the `delivery`
     /// method once the message has been delivered, or failed to.
@@ -66,15 +28,6 @@ pub trait ProducerContext<P = NoCustomPartitioner>: ClientContext {
     }
 
     fn delivery_message_callback(&self, msg: DeliveryResult<'_>, opaque: Self::DeliveryOpaque);
-
-    /// This method is called when creating producer in order to optionally register custom partitioner.
-    /// If custom partitioner is not used then `partitioner` configuration property is used (or its default).
-    ///
-    /// sticky.partitioning.linger.ms must be 0 to run custom partitioner for messages with null key.
-    /// See <https://github.com/confluentinc/librdkafka/blob/081fd972fa97f88a1e6d9a69fc893865ffbb561a/src/rdkafka_msg.c#L1192-L1196>
-    fn get_custom_partitioner(&self) -> Option<&P> {
-        None
-    }
 }
 
 #[derive(Default, Clone)]
@@ -88,12 +41,19 @@ impl ProducerContext for DefaultProducerContext {
     fn delivery_message_callback(&self, _: DeliveryResult<'_>, _: Self::DeliveryOpaque) {}
 }
 
-#[derive(Debug)]
 struct ProducerClient<C = DefaultProducerContext> {
     client: NativeClient<C>,
     #[cfg(feature = "tokio")]
     _poll_task_handle: Arc<tokio::task::JoinHandle<()>>,
 }
+
+impl<C> std::fmt::Debug for ProducerClient<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProducerClient").finish()
+    }
+}
+
+impl<C> ProducerClient<C> {}
 
 impl<C> ClientContext for ProducerClient<C> where C: ProducerContext {}
 
@@ -139,6 +99,15 @@ impl<C> Producer<C> {
     pub fn context(&self) -> &C {
         self.producer.client.context()
     }
+
+    pub fn register_topic<D, F, T>(&self, topic: T) -> Result<Topic<D>>
+    where
+        D: IntoOpaque,
+        F: Partitioner<D> + 'static,
+        T: Into<TopicConf<D, F>>,
+    {
+        self.producer.client.register_topic(topic.into())
+    }
 }
 
 impl<C> Producer<C>
@@ -169,15 +138,15 @@ where
             }
         }
 
-        let topic_cstr = CString::new(record.topic).unwrap();
         let (key_ptr, key_len) = as_bytes(record.key);
         let (payload_ptr, payload_len) = as_bytes(record.payload);
         let opaque_ptr = record.delivery_opaque.into_ptr();
+
         let ret: RDKafkaErrorCode = unsafe {
             rdkafka2_sys::rd_kafka_producev(
                 self.producer.client.native_ptr(),
-                rdkafka2_sys::rd_kafka_vtype_t::RD_KAFKA_VTYPE_TOPIC,
-                topic_cstr.as_ptr(),
+                rdkafka2_sys::rd_kafka_vtype_t::RD_KAFKA_VTYPE_RKT,
+                record.topic.native_topic().ptr(),
                 rdkafka2_sys::rd_kafka_vtype_t::RD_KAFKA_VTYPE_PARTITION,
                 record.partition,
                 rdkafka2_sys::rd_kafka_vtype_t::RD_KAFKA_VTYPE_MSGFLAGS,
