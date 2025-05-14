@@ -5,7 +5,7 @@ use crate::{
     error::{KafkaError, Result},
     log::RDKafkaSyslogLogLevel,
     ptr::NativePtr,
-    topic::{NativeTopic, NativeTopicConf, Topic},
+    topic::{self, NativeTopic},
     util::ErrBuf,
 };
 use rdkafka2_sys::{RDKafkaErrorCode, RDKafkaType, rd_kafka_t};
@@ -154,32 +154,9 @@ impl<C> NativeClient<C> {
         unsafe { rdkafka2_sys::rd_kafka_purge(self.inner.ptr(), timeout.into().as_millis()).into() }
     }
 
-    pub(crate) fn native_topic<T>(&self, topic: T) -> Result<NativeTopic>
-    where
-        T: Into<Topic>,
-    {
-        let topic: Topic = topic.into();
-        let topic_name = CString::new(topic.name).map_err(KafkaError::Nul)?;
-        unsafe {
-            let conf = NativeTopicConf::from_ptr(rdkafka2_sys::rd_kafka_topic_conf_new());
-            let conf = topic.config.into_iter().map(Ok::<_, KafkaError>).try_fold(
-                conf,
-                |conf, next| {
-                    let (k, v) = next?;
-                    conf.set(k.as_str(), v.as_str())?;
-
-                    Ok::<_, KafkaError>(conf)
-                },
-            )?;
-
-            let topic = rdkafka2_sys::rd_kafka_topic_new(
-                self.native_ptr(),
-                topic_name.as_ptr(),
-                conf.ptr(),
-            );
-            std::mem::forget(conf);
-
-            Ok(NativeTopic::from_ptr(topic))
-        }
+    pub(crate) unsafe fn native_topic(&self, topic: &str) -> Result<NativeTopic> {
+        let topic_name = CString::new(topic).map_err(KafkaError::Nul)?;
+        let native_topic = unsafe { topic::create_topic(self, &topic_name, None) }?;
+        Ok(NativeTopic::from_parts(native_topic, Default::default()))
     }
 }

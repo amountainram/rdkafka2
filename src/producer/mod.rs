@@ -1,9 +1,5 @@
 use crate::{
-    IntoOpaque, RDKafkaLogLevel, Timeout,
-    client::{ClientContext, DefaultClientContext, NativeClient},
-    config::{ClientConfig, NativeClientConfig},
-    error::{KafkaError, Result},
-    message::{BaseRecord, BorrowedMessage, DeliveryResult, OwnedHeaders},
+    client::{ClientContext, DefaultClientContext, NativeClient}, config::{ClientConfig, NativeClientConfig}, error::{KafkaError, Result}, message::{BaseRecord, BorrowedMessage, DeliveryResult, OwnedHeaders}, topic::{self, NativeTopic, NativeTopicConf, Partitioner, Topic, TopicRegistration}, IntoOpaque, RDKafkaLogLevel, Timeout
 };
 pub use builder::ProducerBuilder;
 use rdkafka2_sys::{
@@ -11,51 +7,16 @@ use rdkafka2_sys::{
     bindings::{rd_kafka_message_t, rd_kafka_t},
 };
 use std::{
-    ffi::{CString, c_void},
-    pin::Pin,
-    ptr,
-    sync::Arc,
-    time::Duration,
+    collections::HashMap, ffi::{c_void, CString}, marker::PhantomData, pin::Pin, ptr, sync::{
+        atomic::{AtomicUsize, Ordering}, Arc, Mutex
+    }, time::Duration
 };
 
 mod builder;
 
 static DEFAULT_PRODUCER_POLL_INTERVAL_MS: u64 = 100;
 
-/// Trait allowing to customize the partitioning of messages.
-pub trait Partitioner {
-    /// Return partition to use for `topic_name`.
-    /// `topic_name` is the name of a topic to which a message is being produced.
-    /// `partition_cnt` is the number of partitions for this topic.
-    /// `key` is an optional key of the message.
-    /// `is_partition_available` is a function that can be called to check if a partition has an active leader broker.
-    ///
-    /// It may be called in any thread at any time,
-    /// It may be called multiple times for the same message/key.
-    /// MUST NOT block or execute for prolonged periods of time.
-    /// MUST return a value between 0 and partition_cnt-1, or the
-    /// special RD_KAFKA_PARTITION_UA value if partitioning could not be performed.
-    /// See documentation for rd_kafka_topic_conf_set_partitioner_cb from librdkafka for more info.
-    fn partition(
-        &self,
-        topic_name: &str,
-        key: Option<&[u8]>,
-        partition_cnt: i32,
-        is_partition_available: impl Fn(i32) -> bool,
-    ) -> i32;
-}
-
-/// Placeholder used when no custom partitioner is needed.
-#[derive(Clone)]
-pub struct NoCustomPartitioner {}
-
-impl Partitioner for NoCustomPartitioner {
-    fn partition(&self, _: &str, _: Option<&[u8]>, _: i32, _: impl Fn(i32) -> bool) -> i32 {
-        unreachable!("NoCustomPartitioner should not be called");
-    }
-}
-
-pub trait ProducerContext<P = NoCustomPartitioner>: ClientContext {
+pub trait ProducerContext: ClientContext {
     /// A `DeliveryOpaque` is a user-defined structure that will be passed to
     /// the producer when producing a message, and returned to the `delivery`
     /// method once the message has been delivered, or failed to.
@@ -66,15 +27,6 @@ pub trait ProducerContext<P = NoCustomPartitioner>: ClientContext {
     }
 
     fn delivery_message_callback(&self, msg: DeliveryResult<'_>, opaque: Self::DeliveryOpaque);
-
-    /// This method is called when creating producer in order to optionally register custom partitioner.
-    /// If custom partitioner is not used then `partitioner` configuration property is used (or its default).
-    ///
-    /// sticky.partitioning.linger.ms must be 0 to run custom partitioner for messages with null key.
-    /// See <https://github.com/confluentinc/librdkafka/blob/081fd972fa97f88a1e6d9a69fc893865ffbb561a/src/rdkafka_msg.c#L1192-L1196>
-    fn get_custom_partitioner(&self) -> Option<&P> {
-        None
-    }
 }
 
 #[derive(Default, Clone)]
@@ -88,12 +40,20 @@ impl ProducerContext for DefaultProducerContext {
     fn delivery_message_callback(&self, _: DeliveryResult<'_>, _: Self::DeliveryOpaque) {}
 }
 
-#[derive(Debug)]
 struct ProducerClient<C = DefaultProducerContext> {
     client: NativeClient<C>,
+    topics: TopicMap,
     #[cfg(feature = "tokio")]
     _poll_task_handle: Arc<tokio::task::JoinHandle<()>>,
 }
+
+impl<C> std::fmt::Debug for ProducerClient<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProducerClient").finish()
+    }
+}
+
+impl<C> ProducerClient<C> {}
 
 impl<C> ClientContext for ProducerClient<C> where C: ProducerContext {}
 
@@ -141,6 +101,32 @@ impl<C> Producer<C> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct TopicRegistration<'a>
+{
+    name: &'a str,
+    native_topic: NativeTopic,
+}
+
+impl TopicRegistration<'_> {
+    pub fn name(&self) -> &str {
+        self.name
+    }
+}
+
+impl<C> Producer<C> {
+    pub fn register_topic<'a, D, F>(&'a self, topic: &'a mut Topic<D, F>) -> Result<TopicRegistration<'a>> where D: IntoOpaque, F: Partitioner<D> + 'static {
+        let mut topics = self
+            .producer
+            .topics
+            .lock()
+            .map_err(|_| KafkaError::TopicMapLock)?;
+        let native_topic = native_topic(&mut topics, &self.producer.client, topic)?;
+        let name = topic.name();
+        Ok(TopicRegistration { name, native_topic })
+    }
+}
+
 impl<C> Producer<C>
 where
     C: ProducerContext,
@@ -169,15 +155,15 @@ where
             }
         }
 
-        let topic_cstr = CString::new(record.topic).unwrap();
         let (key_ptr, key_len) = as_bytes(record.key);
         let (payload_ptr, payload_len) = as_bytes(record.payload);
         let opaque_ptr = record.delivery_opaque.into_ptr();
+
         let ret: RDKafkaErrorCode = unsafe {
             rdkafka2_sys::rd_kafka_producev(
                 self.producer.client.native_ptr(),
-                rdkafka2_sys::rd_kafka_vtype_t::RD_KAFKA_VTYPE_TOPIC,
-                topic_cstr.as_ptr(),
+                rdkafka2_sys::rd_kafka_vtype_t::RD_KAFKA_VTYPE_RKT,
+                record.topic.native_topic.ptr(),
                 rdkafka2_sys::rd_kafka_vtype_t::RD_KAFKA_VTYPE_PARTITION,
                 record.partition,
                 rdkafka2_sys::rd_kafka_vtype_t::RD_KAFKA_VTYPE_MSGFLAGS,
@@ -281,6 +267,7 @@ where
 
         let mut producer = Box::pin(ProducerClient {
             client: native_client,
+            topics: Default::default(),
             #[cfg(feature = "tokio")]
             _poll_task_handle: poll_handle.into(),
         });
@@ -302,6 +289,122 @@ impl<C> Clone for Producer<C> {
         Self {
             producer: self.producer.clone(),
             _ptr: self._ptr.clone(),
+        }
+    }
+}
+
+type TopicMeta = (
+    Arc<AtomicUsize>,
+    Option<*mut c_void>,
+    Arc<HashMap<String, String>>,
+);
+
+type TopicMap = Arc<Mutex<HashMap<String, TopicMeta>>>;
+
+unsafe extern "C" fn custom_partitioner(
+    _rkt: *const rdkafka2_sys::rd_kafka_topic_t,
+    keydata: *const c_void,
+    keylen: usize,
+    partition_cnt: i32,
+    rkt_opaque: *mut c_void,
+    _msg_opaque: *mut c_void,
+) -> i32 {
+    let key = unsafe { std::slice::from_raw_parts(keydata as *mut u8, keylen) };
+    let partitioner = unsafe { &*(rkt_opaque as *mut Box<dyn Fn(&[u8], i32) -> i32>) };
+    partitioner(key, partition_cnt)
+}
+
+enum TopicEntity<F> {
+    New {
+        partitioner: Option<F>,
+        config: Arc<HashMap<String, String>>,
+        native_conf: NativeTopicConf,
+    },
+    Referenced {
+        counter: Arc<AtomicUsize>,
+    },
+}
+
+pub(crate) fn native_topic<C, D, F>(
+    topic_map: &mut HashMap<String, TopicMeta>,
+    client: &NativeClient<C>,
+    topic: &mut Topic<D, F>,
+) -> Result<NativeTopic>
+where
+    D: IntoOpaque,
+    F: Partitioner<D> + 'static,
+{
+    let Topic {
+        name,
+        config,
+        partitioner,
+        ..
+    } = topic;
+    let topic_name = CString::new(name.as_str()).map_err(KafkaError::Nul)?;
+    let topic_entity = topic_map
+        .remove(name.as_str())
+        .filter(|(c, ..)| c.load(Ordering::Acquire) != 0)
+        .map(|(counter, ..)| TopicEntity::Referenced { counter })
+        .map(Ok::<_, KafkaError>)
+        .unwrap_or_else(|| {
+            let conf =
+                unsafe { NativeTopicConf::from_ptr(rdkafka2_sys::rd_kafka_topic_conf_new()) };
+            let conf = config
+                .iter()
+                .map(Ok::<_, KafkaError>)
+                .try_fold(conf, |conf, next| {
+                    let (k, v) = next?;
+                    conf.set(k.as_str(), v.as_str())?;
+
+                    Ok::<_, KafkaError>(conf)
+                })?;
+            let partitioner = if let Some(partitioner) = partitioner.take() {
+                let mut partitioner: Box<Box<dyn Partitioner<D>>> =
+                    Box::new(Box::new(partitioner));
+                let partitioner = Box::into_raw(partitioner) as *mut c_void;
+                unsafe {
+                    rdkafka2_sys::rd_kafka_topic_conf_set_opaque(conf.ptr(), partitioner.clone());
+                    rdkafka2_sys::rd_kafka_topic_conf_set_partitioner_cb(
+                        conf.ptr(),
+                        Some(custom_partitioner),
+                    );
+                }
+                Some(partitioner)
+            } else {
+                None
+            };
+
+            Ok(TopicEntity::New {
+                partitioner,
+                config: config.clone(),
+                native_conf: conf,
+            })
+        })?;
+
+    match topic_entity {
+        TopicEntity::Referenced { counter } => {
+            let prev_count = counter.fetch_add(1, Ordering::Release);
+            if prev_count > 0 && (!config.is_empty() || partitioner.is_some()) {
+                //  FIXME: attempt to reinitialize a topic?
+            }
+            let topic = unsafe { topic::create_topic(client, &topic_name, None) }?;
+            Ok(NativeTopic::from_parts(topic, counter))
+        }
+        TopicEntity::New {
+            partitioner: next_partitioner,
+            config,
+            native_conf,
+        } => {
+            unsafe {
+                next_partitioner.map(|p| {
+                let prev_partitioner: Box<Box<dyn Partitioner<D>>> =
+                    Box::from_raw(next_partitioner)
+                })
+            }
+            let counter = Arc::new(AtomicUsize::new(1));
+            let topic_ptr = unsafe { topic::create_topic(client, &topic_name, Some(native_conf)) }?;
+            topic_map.insert(name.to_string(), (counter.clone(), partitioner, config));
+            Ok(NativeTopic::from_parts(topic_ptr, counter))
         }
     }
 }

@@ -1,26 +1,91 @@
 use crate::{
+    IntoOpaque,
+    client::NativeClient,
     error::{KafkaError, Result},
     ptr::NativePtr,
     util::{ErrBuf, check_rdkafka_invalid_arg},
 };
 use rdkafka2_sys::{
-    RDKafkaConfErrorCode, rd_kafka_DeleteTopic_t, rd_kafka_NewTopic_t, rd_kafka_topic_conf_t,
-    rd_kafka_topic_t,
+    RDKafkaConfErrorCode, RDKafkaErrorCode, rd_kafka_DeleteTopic_t, rd_kafka_NewTopic_t,
+    rd_kafka_topic_conf_t, rd_kafka_topic_t,
 };
-use std::{collections::HashMap, ffi::CString};
+use std::{
+    collections::HashMap,
+    ffi::{CStr, CString},
+    fmt,
+    marker::PhantomData,
+    sync::{Arc, atomic::AtomicUsize},
+};
 use typed_builder::TypedBuilder;
 
+pub(crate) unsafe fn create_topic<C>(
+    client: &NativeClient<C>,
+    topic_name: &CStr,
+    native_conf: Option<NativeTopicConf>,
+) -> Result<NativePtr<rdkafka2_sys::rd_kafka_topic_t>> {
+    unsafe {
+        let topic_ptr = rdkafka2_sys::rd_kafka_topic_new(
+            client.native_ptr(),
+            topic_name.as_ptr(),
+            native_conf
+                .as_ref()
+                .map(|p| p.ptr())
+                .unwrap_or(std::ptr::null_mut()),
+        );
+        if let Some(native_conf) = native_conf {
+            std::mem::forget(native_conf);
+        }
+        (!topic_ptr.is_null())
+            .then(|| NativePtr::from_ptr(topic_ptr))
+            .ok_or(KafkaError::TopicCreation(RDKafkaErrorCode::from(
+                rdkafka2_sys::rd_kafka_errno2err(
+                    #[cfg(target_os = "linux")]
+                    *libc::__errno_location(),
+                ),
+            )))
+    }
+}
+
 #[derive(Debug)]
-#[repr(transparent)]
-pub(crate) struct NativeTopic(NativePtr<rd_kafka_topic_t>);
+pub struct NativeTopic {
+    inner: Arc<NativePtr<rd_kafka_topic_t>>,
+    counter: Arc<AtomicUsize>,
+}
+
+impl Clone for NativeTopic {
+    fn clone(&self) -> Self {
+        self.counter
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self {
+            inner: self.inner.clone(),
+            counter: self.counter.clone(),
+        }
+    }
+}
+
+impl From<&NativeTopic> for NativeTopic {
+    fn from(value: &NativeTopic) -> Self {
+        value.clone()
+    }
+}
+
+impl Drop for NativeTopic {
+    fn drop(&mut self) {
+        self.counter
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
 
 impl NativeTopic {
     pub(crate) fn ptr(&self) -> *mut rd_kafka_topic_t {
-        self.0.ptr()
+        self.inner.ptr()
     }
 
-    pub(crate) unsafe fn from_ptr(ptr: *mut rd_kafka_topic_t) -> Self {
-        unsafe { Self(NativePtr::from_ptr(ptr)) }
+    pub(crate) fn from_parts(ptr: NativePtr<rd_kafka_topic_t>, counter: Arc<AtomicUsize>) -> Self {
+        Self {
+            inner: ptr.into(),
+            counter,
+        }
     }
 }
 
@@ -110,14 +175,52 @@ where
     }
 }
 
+pub trait Partitioner<D>: Fn(&[u8], i32, D) -> i32 {}
+
+impl<D, F> Partitioner<D> for F where F: Fn(&[u8], i32, D) -> i32 {}
+
 /// Configuration for a CreateTopic operation.
-#[derive(Debug, TypedBuilder)]
-pub struct Topic {
+#[derive(TypedBuilder)]
+pub struct Topic<D = (), F = fn(&[u8], i32, D) -> i32>
+where
+    D: IntoOpaque,
+    F: Partitioner<D>,
+{
     /// The name of the new topic.
-    pub name: String,
+    #[builder(setter(into))]
+    pub(crate) name: String,
     /// The initial configuration parameters for the topic.
     #[builder(default)]
-    pub config: HashMap<String, String>,
+    pub(crate) config: Arc<HashMap<String, String>>,
+    /// A custom partitioner function for the topic.
+    #[builder(default, setter(strip_option))]
+    pub(crate) partitioner: Option<F>,
+    #[builder(default, setter(skip))]
+    _marker: PhantomData<D>,
+}
+
+impl<D, F> std::fmt::Debug for Topic<D, F>
+where
+    D: IntoOpaque,
+    F: Partitioner<D> + fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Topic")
+            .field("name", &self.name)
+            .field("config", &self.config)
+            .field("partitioner", &self.partitioner)
+            .finish()
+    }
+}
+
+impl<D, F> Topic<D, F>
+where
+    D: IntoOpaque,
+    F: Partitioner<D>,
+{
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 impl<S> From<S> for Topic
@@ -128,6 +231,8 @@ where
         Self {
             name: name.into(),
             config: Default::default(),
+            partitioner: Default::default(),
+            _marker: PhantomData,
         }
     }
 }
