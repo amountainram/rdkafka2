@@ -4,7 +4,7 @@ use crate::{
     config::{ClientConfig, NativeClientConfig},
     error::{KafkaError, Result},
     message::{BaseRecord, BorrowedMessage, DeliveryResult, OwnedHeaders},
-    topic::{Partitioner, TopicConf},
+    topic::{Partitioner, TopicSettings},
 };
 pub use builder::ProducerBuilder;
 use rdkafka2_sys::{
@@ -104,7 +104,7 @@ impl<C> Producer<C> {
     where
         D: IntoOpaque,
         F: Partitioner<D> + 'static,
-        T: Into<TopicConf<D, F>>,
+        T: Into<TopicSettings<D, F>>,
     {
         self.producer.client.register_topic(topic.into())
     }

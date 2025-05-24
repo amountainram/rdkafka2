@@ -1,5 +1,6 @@
 use crate::{
     IntoOpaque,
+    client::TopicConfig,
     error::{KafkaError, Result},
     ptr::NativePtr,
     util::{ErrBuf, check_rdkafka_invalid_arg},
@@ -122,7 +123,7 @@ impl<D, F> Partitioner<D> for F where F: Fn(&[u8], i32, D) -> i32 + Send + Sync 
 
 /// Configuration for a CreateTopic operation.
 #[derive(TypedBuilder)]
-pub struct TopicConf<D = (), F = fn(&[u8], i32, D) -> i32>
+pub struct TopicSettings<D = (), F = fn(&[u8], i32, D) -> i32>
 where
     D: IntoOpaque,
     F: Partitioner<D>,
@@ -131,8 +132,8 @@ where
     #[builder(setter(into))]
     pub(crate) name: String,
     /// The initial configuration parameters for the topic.
-    #[builder(default)]
-    pub(crate) configuration: HashMap<String, String>,
+    #[builder(default, setter(into))]
+    pub(crate) configuration: TopicConfig,
     /// A custom partitioner function for the topic.
     #[builder(default, setter(strip_option, suffix = "_with_opaque"))]
     pub(crate) partitioner: Option<F>,
@@ -141,9 +142,8 @@ where
 }
 
 #[allow(dead_code, non_camel_case_types, missing_docs)]
-#[automatically_derived]
 impl<__name, __configuration>
-    TopicConfBuilder<(), Box<dyn Partitioner>, (__name, __configuration, ())>
+    TopicSettingsBuilder<(), Box<dyn Partitioner>, (__name, __configuration, ())>
 {
     /// A custom partitioner function for the topic.
     #[allow(
@@ -154,7 +154,7 @@ impl<__name, __configuration>
     pub fn partitioner<FIn>(
         self,
         partitioner: FIn,
-    ) -> TopicConfBuilder<
+    ) -> TopicSettingsBuilder<
         (),
         Box<dyn Partitioner>,
         (__name, __configuration, (Option<Box<dyn Partitioner>>,)),
@@ -166,14 +166,14 @@ impl<__name, __configuration>
             Box::new(move |key, partition, _| partitioner(key, partition));
         let partitioner = (Some(partitioner),);
         let (name, configuration, ()) = self.fields;
-        TopicConfBuilder {
+        TopicSettingsBuilder {
             fields: (name, configuration, partitioner),
             phantom: self.phantom,
         }
     }
 }
 
-impl<D, F> std::fmt::Debug for TopicConf<D, F>
+impl<D, F> std::fmt::Debug for TopicSettings<D, F>
 where
     D: IntoOpaque,
     F: Partitioner<D> + fmt::Debug,
@@ -187,7 +187,7 @@ where
     }
 }
 
-impl<D, F> TopicConf<D, F>
+impl<D, F> TopicSettings<D, F>
 where
     D: IntoOpaque,
     F: Partitioner<D>,
@@ -197,7 +197,7 @@ where
     }
 }
 
-impl<S> From<S> for TopicConf
+impl<S> From<S> for TopicSettings
 where
     S: Into<String>,
 {

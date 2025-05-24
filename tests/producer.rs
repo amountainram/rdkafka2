@@ -6,7 +6,7 @@ use rdkafka2::{
     config::ClientConfig,
     message::{DeliveryResult, OwnedBaseRecord, OwnedMessage},
     producer::{Producer, ProducerContext},
-    topic::TopicConf,
+    topic::TopicSettings,
 };
 use rdkafka2_sys::RDKafkaErrorCode;
 use rstest::{fixture, rstest};
@@ -187,7 +187,7 @@ async fn custom_partitioner_production(config: ClientConfig, topic_name: String)
     create_multiple_partitions_topic(&config, topic_name.as_str()).await;
 
     let (producer, delivery_stream) = test_producer(config);
-    let topic_conf = TopicConf::builder()
+    let topic_conf = TopicSettings::builder()
         .name(topic_name.as_str())
         .partitioner(|_, _| 2)
         .build();
@@ -231,7 +231,7 @@ async fn topic_registration(config: ClientConfig, topic_name: String) {
 
     drop(topic);
 
-    let topic_conf = TopicConf::builder()
+    let topic_conf = TopicSettings::builder()
         .name(topic_name.as_str())
         .partitioner(|_, _| 0)
         .build();

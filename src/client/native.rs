@@ -5,25 +5,159 @@ use crate::{
     error::{KafkaError, Result},
     log::RDKafkaSyslogLogLevel,
     ptr::NativePtr,
-    topic::{NativeTopic, NativeTopicConf, Partitioner, TopicConf},
-    util::ErrBuf,
+    topic::{NativeTopic, NativeTopicConf, Partitioner, TopicSettings},
+    util::{ErrBuf, cstr_to_owned},
 };
-use rdkafka2_sys::{RDKafkaErrorCode, RDKafkaType, rd_kafka_t};
+use once_cell::sync::Lazy;
+use rdkafka2_sys::{
+    RDKafkaConfErrorCode, RDKafkaErrorCode, RDKafkaType, rd_kafka_t, rd_kafka_topic_conf_t,
+};
 use std::{
     borrow::Borrow,
-    collections::HashMap,
-    ffi::{CStr, CString, c_void},
+    collections::{HashMap, hash_map::IntoIter},
+    ffi::{CStr, CString, c_char, c_void},
     hash::Hash,
     marker::PhantomData,
     mem::ManuallyDrop,
+    ptr::null_mut,
     sync::{Arc, Mutex},
 };
+
+#[repr(transparent)]
+struct DefaultNativeTopicConfig(NativePtr<rd_kafka_topic_conf_t>);
+
+unsafe impl Send for DefaultNativeTopicConfig {}
+
+unsafe impl Sync for DefaultNativeTopicConfig {}
+
+static DEFAULT_RDKAFKA_TOPIC_CONFIG: Lazy<DefaultNativeTopicConfig> = Lazy::new(|| unsafe {
+    DefaultNativeTopicConfig(NativePtr::from_ptr(rdkafka2_sys::rd_kafka_topic_conf_new()))
+});
+
+fn get_topic_conf_property(conf: *mut rd_kafka_topic_conf_t, key: &str) -> Result<String> {
+    let make_err = |res| KafkaError::ClientConfig(res, key.into());
+    let key_c = CString::new(key.to_string())?;
+
+    // Call with a `NULL` buffer to determine the size of the string.
+    let mut size = 0_usize;
+    let res = unsafe {
+        rdkafka2_sys::rd_kafka_topic_conf_get(conf, key_c.as_ptr(), null_mut(), &mut size)
+    };
+    if let Some(err) = RDKafkaConfErrorCode::from(res).error() {
+        return Err(make_err(*err));
+    }
+
+    // Allocate a buffer of that size and call again to get the actual
+    // string.
+    let mut buf = vec![0_u8; size];
+    let res = unsafe {
+        rdkafka2_sys::rd_kafka_topic_conf_get(
+            conf,
+            key_c.as_ptr(),
+            buf.as_mut_ptr() as *mut c_char,
+            &mut size,
+        )
+    };
+    if let Some(err) = RDKafkaConfErrorCode::from(res).error() {
+        return Err(make_err(*err));
+    }
+
+    unsafe { Ok(cstr_to_owned(buf.as_ptr() as *const c_char)) }
+}
+
+fn get_topic_conf_default_value(key: &str) -> Result<String> {
+    get_topic_conf_property(DEFAULT_RDKAFKA_TOPIC_CONFIG.0.ptr(), key)
+}
+
+/// Generic Kafka topic configuration.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(::serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(transparent))]
+pub struct TopicConfig {
+    inner: HashMap<String, String>,
+}
+
+impl TopicConfig {
+    pub fn set<Q, R>(&mut self, key: Q, value: R) -> &mut Self
+    where
+        Q: Into<String>,
+        R: Into<String>,
+    {
+        self.inner.insert(key.into(), value.into());
+        self
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &String)> {
+        self.inner.iter()
+    }
+
+    pub fn get_config_prop_or_default<Q>(&self, k: &Q) -> Option<String>
+    where
+        String: Borrow<Q>,
+        Q: Hash + Eq + AsRef<str> + ?Sized,
+    {
+        let key_str = k.as_ref();
+        self.inner
+            .get(k)
+            .map(String::from)
+            .or_else(|| get_topic_conf_default_value(key_str).ok())
+    }
+}
+
+impl Default for TopicConfig {
+    fn default() -> Self {
+        Self {
+            inner: HashMap::with_capacity(0),
+        }
+    }
+}
+
+impl<K, V> FromIterator<(K, V)> for TopicConfig
+where
+    K: Into<String>,
+    V: Into<String>,
+{
+    fn from_iter<I>(iter: I) -> TopicConfig
+    where
+        I: IntoIterator<Item = (K, V)>,
+    {
+        let mut config = TopicConfig::default();
+        config
+            .inner
+            .extend(iter.into_iter().map(|(k, v)| (k.into(), v.into())));
+        config
+    }
+}
+
+impl<K, V> Extend<(K, V)> for TopicConfig
+where
+    K: Into<String>,
+    V: Into<String>,
+{
+    fn extend<I>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = (K, V)>,
+    {
+        self.inner
+            .extend(iter.into_iter().map(|(k, v)| (k.into(), v.into())))
+    }
+}
+
+impl IntoIterator for TopicConfig {
+    type Item = (String, String);
+
+    type IntoIter = IntoIter<String, String>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.into_iter()
+    }
+}
 
 #[derive(Debug)]
 struct TopicRegistration<D = ()> {
     name: String,
     native_topic: NativeTopic,
-    configuration: HashMap<String, String>,
+    configuration: TopicConfig,
     partitioner: Option<*mut c_void>,
     _marker: PhantomData<D>,
 }
@@ -204,12 +338,6 @@ impl<C> NativeClient<C> {
     {
         unsafe { rdkafka2_sys::rd_kafka_purge(self.inner.ptr(), timeout.into().as_millis()).into() }
     }
-
-    // pub(crate) unsafe fn native_topic(&self, topic: &str) -> Result<NativeTopic> {
-    //     let topic_name = CString::new(topic).map_err(KafkaError::Nul)?;
-    //     let native_topic = unsafe { self.create_topic(&topic_name, None) }?;
-    //     Ok(NativeTopic::from_ptr(native_topic))
-    // }
 }
 
 #[derive(Debug)]
@@ -233,8 +361,7 @@ impl<D> Topic<D> {
         &self.inner.native_topic
     }
 
-    // FIXME: add default topic configuration
-    pub fn configuration(&self) -> &HashMap<String, String> {
+    pub fn configuration(&self) -> &TopicConfig {
         &self.inner.configuration
     }
 }
@@ -274,10 +401,7 @@ impl<C> NativeClient<C> {
             let topic_ptr = rdkafka2_sys::rd_kafka_topic_new(
                 self.native_ptr(),
                 topic_name.as_ptr(),
-                native_conf
-                    .as_ref()
-                    .map(|p| p.ptr())
-                    .unwrap_or(std::ptr::null_mut()),
+                native_conf.as_ref().map(|p| p.ptr()).unwrap_or(null_mut()),
             );
             if let Some(native_conf) = native_conf {
                 std::mem::forget(native_conf);
@@ -297,11 +421,11 @@ impl<C> NativeClient<C> {
     where
         D: IntoOpaque,
         F: Partitioner<D> + 'static,
-        T: Into<TopicConf<D, F>>,
+        T: Into<TopicSettings<D, F>>,
     {
         let mut topic_map = self.topics.lock().map_err(|_| KafkaError::TopicMapLock)?;
 
-        let TopicConf {
+        let TopicSettings {
             name,
             configuration,
             mut partitioner,
@@ -360,5 +484,34 @@ impl<C> NativeClient<C> {
             inner: topic_registration,
             _marker: PhantomData,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unchecked_topic_conf_property() {
+        let mut topic_settings: TopicSettings = "topic_name".into();
+
+        topic_settings
+            .configuration
+            .set("compression.type", "snappy");
+
+        assert_eq!(
+            topic_settings
+                .configuration
+                .get_config_prop_or_default("request.required.acks")
+                .unwrap(),
+            "-1"
+        );
+        assert_eq!(
+            topic_settings
+                .configuration
+                .get_config_prop_or_default("compression.type")
+                .unwrap(),
+            "snappy"
+        );
     }
 }

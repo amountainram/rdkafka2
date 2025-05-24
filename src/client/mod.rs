@@ -4,7 +4,7 @@ use crate::{
 };
 pub use admin::*;
 pub use builders::*;
-pub use native::{NativeClient, Topic};
+pub use native::{NativeClient, Topic, TopicConfig};
 use std::ffi::{c_char, c_int};
 
 mod admin;
