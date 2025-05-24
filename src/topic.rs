@@ -1,4 +1,5 @@
 use crate::{
+    IntoOpaque,
     error::{KafkaError, Result},
     ptr::NativePtr,
     util::{ErrBuf, check_rdkafka_invalid_arg},
@@ -7,20 +8,25 @@ use rdkafka2_sys::{
     RDKafkaConfErrorCode, rd_kafka_DeleteTopic_t, rd_kafka_NewTopic_t, rd_kafka_topic_conf_t,
     rd_kafka_topic_t,
 };
-use std::{collections::HashMap, ffi::CString};
+use std::{collections::HashMap, ffi::CString, fmt, marker::PhantomData};
 use typed_builder::TypedBuilder;
 
-#[derive(Debug)]
-#[repr(transparent)]
-pub(crate) struct NativeTopic(NativePtr<rd_kafka_topic_t>);
+#[derive(Debug, Clone)]
+pub struct NativeTopic(NativePtr<rd_kafka_topic_t>);
+
+impl From<&NativeTopic> for NativeTopic {
+    fn from(value: &NativeTopic) -> Self {
+        value.clone()
+    }
+}
 
 impl NativeTopic {
     pub(crate) fn ptr(&self) -> *mut rd_kafka_topic_t {
         self.0.ptr()
     }
 
-    pub(crate) unsafe fn from_ptr(ptr: *mut rd_kafka_topic_t) -> Self {
-        unsafe { Self(NativePtr::from_ptr(ptr)) }
+    pub(crate) fn from_ptr(ptr: NativePtr<rd_kafka_topic_t>) -> Self {
+        Self(ptr)
     }
 }
 
@@ -110,24 +116,97 @@ where
     }
 }
 
+pub trait Partitioner<D = ()>: Fn(&[u8], i32, D) -> i32 + Send + Sync + 'static {}
+
+impl<D, F> Partitioner<D> for F where F: Fn(&[u8], i32, D) -> i32 + Send + Sync + 'static {}
+
 /// Configuration for a CreateTopic operation.
-#[derive(Debug, TypedBuilder)]
-pub struct Topic {
+#[derive(TypedBuilder)]
+pub struct TopicConf<D = (), F = fn(&[u8], i32, D) -> i32>
+where
+    D: IntoOpaque,
+    F: Partitioner<D>,
+{
     /// The name of the new topic.
-    pub name: String,
+    #[builder(setter(into))]
+    pub(crate) name: String,
     /// The initial configuration parameters for the topic.
     #[builder(default)]
-    pub config: HashMap<String, String>,
+    pub(crate) configuration: HashMap<String, String>,
+    /// A custom partitioner function for the topic.
+    #[builder(default, setter(strip_option, suffix = "_with_opaque"))]
+    pub(crate) partitioner: Option<F>,
+    #[builder(default, setter(skip))]
+    _marker: PhantomData<D>,
 }
 
-impl<S> From<S> for Topic
+#[allow(dead_code, non_camel_case_types, missing_docs)]
+#[automatically_derived]
+impl<__name, __configuration>
+    TopicConfBuilder<(), Box<dyn Partitioner>, (__name, __configuration, ())>
+{
+    /// A custom partitioner function for the topic.
+    #[allow(
+        clippy::used_underscore_binding,
+        clippy::no_effect_underscore_binding,
+        clippy::type_complexity
+    )]
+    pub fn partitioner<FIn>(
+        self,
+        partitioner: FIn,
+    ) -> TopicConfBuilder<
+        (),
+        Box<dyn Partitioner>,
+        (__name, __configuration, (Option<Box<dyn Partitioner>>,)),
+    >
+    where
+        FIn: Fn(&[u8], i32) -> i32 + Send + Sync + 'static,
+    {
+        let partitioner: Box<dyn Partitioner> =
+            Box::new(move |key, partition, _| partitioner(key, partition));
+        let partitioner = (Some(partitioner),);
+        let (name, configuration, ()) = self.fields;
+        TopicConfBuilder {
+            fields: (name, configuration, partitioner),
+            phantom: self.phantom,
+        }
+    }
+}
+
+impl<D, F> std::fmt::Debug for TopicConf<D, F>
+where
+    D: IntoOpaque,
+    F: Partitioner<D> + fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Topic")
+            .field("name", &self.name)
+            .field("config", &self.configuration)
+            .field("partitioner", &self.partitioner)
+            .finish()
+    }
+}
+
+impl<D, F> TopicConf<D, F>
+where
+    D: IntoOpaque,
+    F: Partitioner<D>,
+{
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl<S> From<S> for TopicConf
 where
     S: Into<String>,
 {
     fn from(name: S) -> Self {
         Self {
             name: name.into(),
-            config: Default::default(),
+            configuration: Default::default(),
+            partitioner: Default::default(),
+            _marker: PhantomData,
         }
     }
 }

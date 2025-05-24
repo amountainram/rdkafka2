@@ -1,16 +1,18 @@
 use backon::{ConstantBuilder, RetryableWithContext};
 use rand::{Rng, distr::Alphanumeric};
 use rdkafka2::{
-    KafkaError, RDKafkaLogLevel, Timeout,
+    KafkaError, Timeout,
     client::{
-        AclBinding, AclBindingFilter, AdminClient, Cluster, DefaultClientContext, Node,
-        PartitionMetadata, ResourceType, ResourceTypeRequest, TopicMetadata,
+        AclBinding, AclBindingFilter, AdminClient, Cluster, Node, PartitionMetadata, ResourceType,
+        ResourceTypeRequest, TopicMetadata,
     },
     config::ClientConfig,
 };
 use rdkafka2_sys::RDKafkaErrorCode;
 use rstest::{fixture, rstest};
 use std::time::Duration;
+
+mod common;
 
 fn generate_random_string(len: usize) -> String {
     rand::rng()
@@ -35,15 +37,6 @@ fn kafka_broker() -> &'static str {
     LOCALHOST_BROKER
 }
 
-fn test_admin_client(config: ClientConfig) -> AdminClient {
-    AdminClient::builder()
-        .config(config)
-        .log_level(RDKafkaLogLevel::Debug)
-        .context(DefaultClientContext.into())
-        .try_build()
-        .expect("client to be built")
-}
-
 #[fixture]
 fn config() -> ClientConfig {
     ClientConfig::from_iter([
@@ -56,7 +49,7 @@ fn config() -> ClientConfig {
 #[rstest]
 #[tokio::test(flavor = "current_thread")]
 async fn create_and_delete_topics(config: ClientConfig, topic_names: Vec<String>) {
-    let admin_client = test_admin_client(config);
+    let admin_client = common::test_admin_client(config);
     admin_client
         .create_topics(topic_names.clone(), Default::default())
         .await
@@ -114,7 +107,7 @@ async fn create_and_delete_topics(config: ClientConfig, topic_names: Vec<String>
 #[rstest]
 #[tokio::test(flavor = "current_thread")]
 async fn retrieve_configs(config: ClientConfig) {
-    let admin_client = test_admin_client(config);
+    let admin_client = common::test_admin_client(config);
     let resource = admin_client
         .describe_resource("1", ResourceTypeRequest::Broker, Default::default())
         .await
@@ -126,7 +119,7 @@ async fn retrieve_configs(config: ClientConfig) {
 #[rstest]
 #[tokio::test(flavor = "current_thread")]
 async fn describe_cluster(config: ClientConfig) {
-    let admin_client = test_admin_client(config);
+    let admin_client = common::test_admin_client(config);
     let cluster = admin_client
         .describe_cluster(Default::default())
         .await
@@ -178,7 +171,7 @@ async fn test_acls(client: &AdminClient, expected: Vec<AclBinding>) {
 #[rstest]
 #[tokio::test(flavor = "current_thread")]
 async fn acls_crud_ops(config: ClientConfig) {
-    let admin_client = test_admin_client(config);
+    let admin_client = common::test_admin_client(config);
 
     test_acls(&admin_client, vec![]).await;
 

@@ -2,15 +2,27 @@ use futures::{Stream, TryStreamExt};
 use rand::{Rng, distr::Alphanumeric};
 use rdkafka2::{
     KafkaError, RDKafkaLogLevel,
-    client::ClientContext,
+    client::{ClientContext, Topic},
     config::ClientConfig,
-    message::{DeliveryResult, OwnedMessage},
+    message::{DeliveryResult, OwnedBaseRecord, OwnedMessage},
     producer::{Producer, ProducerContext},
+    topic::TopicConf,
 };
 use rdkafka2_sys::RDKafkaErrorCode;
 use rstest::{fixture, rstest};
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
+
+mod common;
+
+#[fixture]
+fn config() -> ClientConfig {
+    ClientConfig::from_iter([
+        ("bootstrap.servers", kafka_broker()),
+        ("log_level", "7"),
+        ("debug", "all"),
+    ])
+}
 
 fn generate_random_string(len: usize) -> String {
     rand::rng()
@@ -77,8 +89,11 @@ fn test_producer(
 }
 
 #[rstest]
-#[case(
-    ClientConfig::from_iter([
+#[tokio::test(flavor = "current_thread")]
+async fn unknown_topic(topic_name: String) {
+    use rdkafka2::message::BaseRecord;
+
+    let config = ClientConfig::from_iter([
         ("bootstrap.servers", kafka_broker()),
         ("allow.auto.create.topics", "false"),
         ("topic.metadata.propagation.max.ms", "2"),
@@ -86,18 +101,17 @@ fn test_producer(
         // within 2ms from test startup
         ("log_level", "7"),
         ("debug", "all"),
-    ])
-)]
-#[tokio::test(flavor = "current_thread")]
-async fn unknown_topic(#[case] config: ClientConfig, topic_name: String) {
-    use rdkafka2::message::BaseRecord;
+    ]);
 
+    let (producer, delivery_stream) = test_producer(config);
+    let topic = producer
+        .register_topic(topic_name)
+        .expect("topic to be registered");
     let record = BaseRecord::builder()
         .key(r#"{"id":"1"}"#.as_bytes())
         .payload(r#"{"id":"2"}"#.as_bytes())
-        .topic(topic_name.as_str())
+        .topic(&topic)
         .build();
-    let (producer, delivery_stream) = test_producer(config);
     producer.send(record).expect("message to be produced");
     assert_eq!(
         delivery_stream
@@ -115,23 +129,19 @@ async fn unknown_topic(#[case] config: ClientConfig, topic_name: String) {
 }
 
 #[rstest]
-#[case(
-    ClientConfig::from_iter([
-        ("bootstrap.servers", kafka_broker()),
-        ("log_level", "7"),
-        ("debug", "all"),
-    ])
-)]
 #[tokio::test]
-async fn simple_producer(#[case] config: ClientConfig, topic_name: String) {
+async fn simple_producer(config: ClientConfig, topic_name: String) {
     use rdkafka2::message::BaseRecord;
 
+    let (producer, delivery_stream) = test_producer(config);
+    let topic = producer
+        .register_topic(topic_name)
+        .expect("topic to be registered");
     let record = BaseRecord::builder()
         .key(r#"{"id":"1"}"#.as_bytes())
         .payload(r#"{"id":"2"}"#.as_bytes())
-        .topic(topic_name.as_str())
+        .topic(&topic)
         .build();
-    let (producer, delivery_stream) = test_producer(config);
     producer.send(record).expect("message to be produced");
 
     let produced = delivery_stream
@@ -144,4 +154,86 @@ async fn simple_producer(#[case] config: ClientConfig, topic_name: String) {
     assert_eq!(produced.unwrap().len(), 1);
 
     drop(producer);
+}
+
+async fn create_multiple_partitions_topic(config: &ClientConfig, name: &str) {
+    let admin_client = common::test_admin_client(config.clone());
+    let topic = rdkafka2::topic::NewTopic::builder()
+        .name(name)
+        .num_partitions(3)
+        .replication(rdkafka2::topic::TopicReplication::Fixed(1))
+        .build();
+    admin_client
+        .create_topics(vec![topic], Default::default())
+        .await
+        .unwrap_or_else(|_| panic!("topic {} to be created", name));
+}
+
+fn create_records(topic: Topic, count: usize) -> Vec<OwnedBaseRecord> {
+    (0..count)
+        .map(|i| {
+            OwnedBaseRecord::builder()
+                .topic(topic.clone())
+                .key(format!(r#"{{"id":"{}"}}"#, i).as_bytes().to_vec())
+                .payload(format!(r#"{{"id":"{}"}}"#, i).as_bytes().to_vec())
+                .build()
+        })
+        .collect()
+}
+
+#[rstest]
+#[tokio::test]
+async fn custom_partitioner_production(config: ClientConfig, topic_name: String) {
+    create_multiple_partitions_topic(&config, topic_name.as_str()).await;
+
+    let (producer, delivery_stream) = test_producer(config);
+    let topic_conf = TopicConf::builder()
+        .name(topic_name.as_str())
+        .partitioner(|_, _| 2)
+        .build();
+    let topic = producer
+        .register_topic(topic_conf)
+        .expect("topic to be registered");
+
+    let records = create_records(topic, 10);
+    for record in records {
+        producer
+            .send(record.as_ref())
+            .expect("message to be produced");
+    }
+
+    let produced = delivery_stream
+        .map_ok(|_| ())
+        .take(10)
+        .try_collect::<Vec<()>>()
+        .await
+        .map_err(|(err, ..)| err);
+    assert!(produced.is_ok());
+    assert_eq!(produced.unwrap().len(), 10);
+
+    drop(producer);
+}
+
+#[rstest]
+#[tokio::test]
+async fn topic_registration(config: ClientConfig, topic_name: String) {
+    let (producer, _) = test_producer(config);
+    let topic = producer
+        .register_topic(topic_name.as_str())
+        .expect("topic to be registered");
+
+    assert_eq!(topic.name(), topic_name);
+
+    assert_eq!(
+        producer.register_topic(topic_name.as_str()),
+        Err(KafkaError::TopicAlreadyRegistered(topic_name.clone()))
+    );
+
+    drop(topic);
+
+    let topic_conf = TopicConf::builder()
+        .name(topic_name.as_str())
+        .partitioner(|_, _| 0)
+        .build();
+    assert!(producer.register_topic(topic_conf).is_ok());
 }

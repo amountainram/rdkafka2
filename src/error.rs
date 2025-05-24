@@ -76,6 +76,9 @@ pub enum KafkaError {
         actual: RDKafkaEventType,
         expected: RDKafkaEventType,
     },
+    TopicAlreadyRegistered(String),
+    TopicCreation(RDKafkaErrorCode),
+    TopicMapLock,
 }
 
 impl From<NulError> for KafkaError {

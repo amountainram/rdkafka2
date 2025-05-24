@@ -46,6 +46,35 @@ jobs:
       - name: Run tests
         run: cargo test --lib --features=sasl,ssl
 
+  doctest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update;
+          sudo apt-get install -y libsasl2-dev;
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run tests
+        run: cargo test --doc --features=sasl,ssl
+
   e2e:
     runs-on: ubuntu-latest
     steps:

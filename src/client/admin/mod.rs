@@ -4,7 +4,7 @@ use crate::{
     config::{ClientConfig, NativeClientConfig},
     error::Result,
     ptr::{KafkaDrop, NativePtr},
-    topic::{DeleteTopic, NewTopic, Topic},
+    topic::{DeleteTopic, NewTopic},
     util::{ArrayOfResults, ErrBuf, check_rdkafka_invalid_arg},
 };
 pub use acls::*;
@@ -525,9 +525,9 @@ impl<C> AdminClient<C> {
         }
     }
 
-    pub fn blocking_metadata_for_topic<R, T>(&self, topic: R, timeout: T) -> Result<Metadata>
+    pub fn blocking_metadata_for_topic<S, T>(&self, topic: S, timeout: T) -> Result<Metadata>
     where
-        R: Into<Topic>,
+        S: AsRef<str>,
         T: Into<Timeout>,
     {
         const SELECTED_TOPIC: i32 = 0;
@@ -536,11 +536,11 @@ impl<C> AdminClient<C> {
             let mut metadata_ptr = std::ptr::null_mut() as *mut rd_kafka_metadata_t;
             let metadata_ptr_ptr = &mut metadata_ptr as *const *mut rd_kafka_metadata_t;
 
-            let native_topic = self.inner.native_topic(topic)?;
+            let native_topic = self.inner.register_topic(topic.as_ref())?;
             let err = rdkafka2_sys::rd_kafka_metadata(
                 self.inner.native_ptr(),
                 SELECTED_TOPIC,
-                native_topic.ptr(),
+                native_topic.native_topic().ptr(),
                 metadata_ptr_ptr as *mut *const _,
                 timeout.into().as_millis(),
             );
@@ -576,21 +576,21 @@ where
     }
 
     #[cfg(feature = "tokio")]
-    pub fn metadata_for_topic<R, T>(
+    pub fn metadata_for_topic<S, T>(
         &self,
-        topic: R,
+        topic: S,
         timeout: T,
     ) -> impl Future<Output = Result<Metadata>> + Send
     where
-        R: Into<Topic> + Send,
+        S: Into<String>,
         T: Into<Timeout>,
     {
         use futures::TryFutureExt;
 
+        let topic = topic.into();
         let admin = self.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         let timeout = timeout.into();
-        let topic: Topic = topic.into();
         tokio::task::spawn_blocking(move || {
             let _ = tx.send(admin.blocking_metadata_for_topic(topic, timeout));
         });
