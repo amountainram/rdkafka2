@@ -146,7 +146,11 @@ impl<__name, __configuration>
     TopicConfBuilder<(), Box<dyn Partitioner>, (__name, __configuration, ())>
 {
     /// A custom partitioner function for the topic.
-    #[allow(clippy::used_underscore_binding, clippy::no_effect_underscore_binding)]
+    #[allow(
+        clippy::used_underscore_binding,
+        clippy::no_effect_underscore_binding,
+        clippy::type_complexity
+    )]
     pub fn partitioner<FIn>(
         self,
         partitioner: FIn,
