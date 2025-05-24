@@ -12,7 +12,7 @@ executables=$(cargo test --tests $cargo_args \
 serialized_executables=`echo "${executables}" | base64 -w 0`;
 echo "executables=${serialized_executables}" >> ${TEST_E2E_OUTPUT};
 
-valgrind_args="--leak-check=full --gen-suppressions=all"
+valgrind_args="--leak-check=full --suppressions=tests/suppressions/librdkafka.supp --gen-suppressions=all"
 
 for exe in $executables; do
   echo "Running Valgrind on $exe with params $valgrind_args"
