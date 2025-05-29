@@ -55,7 +55,7 @@ impl NewPartitions {
                         )
                     };
 
-                    if let Some(_) = RDKafkaErrorCode::from(ret).error() {
+                    if RDKafkaErrorCode::from(ret).error().is_some() {
                         return Err(KafkaError::AdminOpCreation(err_buf.to_string()));
                     }
                 }

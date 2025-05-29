@@ -10,8 +10,7 @@ use crate::{
 };
 pub use acls::*;
 pub use cluster::*;
-use futures::channel::oneshot;
-use futures::{FutureExt, future::BoxFuture};
+use futures::{FutureExt, channel::oneshot, future::BoxFuture};
 use log::{error, info};
 use rdkafka2_sys::{
     RDKafkaErrorCode, RDKafkaEventType, RDKafkaType, rd_kafka_AdminOptions_t, rd_kafka_admin_op_t,
