@@ -9,6 +9,7 @@ pub mod config;
 pub mod error;
 mod log;
 pub mod message;
+pub mod partitions;
 pub mod producer;
 mod ptr;
 pub mod topic;

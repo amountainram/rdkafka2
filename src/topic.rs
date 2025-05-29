@@ -1,6 +1,6 @@
 use crate::{
     IntoOpaque,
-    client::TopicConfig,
+    client::{BrokerId, TopicConfig},
     error::{KafkaError, Result},
     ptr::NativePtr,
     util::{ErrBuf, check_rdkafka_invalid_arg},
@@ -73,7 +73,26 @@ pub(crate) type NativeNewTopic = NativePtr<rd_kafka_NewTopic_t>;
 /// Each element in the outer slice corresponds to the partition with that
 /// index. The inner slice specifies the broker IDs to which replicas of that
 /// partition should be assigned.
-pub type PartitionAssignment = Vec<Vec<i32>>;
+#[derive(Debug, Clone, PartialEq)]
+pub struct PartitionAssignments(Vec<Vec<BrokerId>>);
+
+impl AsRef<[Vec<BrokerId>]> for PartitionAssignments {
+    fn as_ref(&self) -> &[Vec<BrokerId>] {
+        &self.0
+    }
+}
+
+impl From<usize> for PartitionAssignments {
+    fn from(n: usize) -> Self {
+        Self(vec![Vec::with_capacity(0); n])
+    }
+}
+
+impl From<Vec<Vec<BrokerId>>> for PartitionAssignments {
+    fn from(assignments: Vec<Vec<BrokerId>>) -> Self {
+        Self(assignments)
+    }
+}
 
 /// Replication configuration for a new topic.
 #[derive(Debug)]
@@ -82,38 +101,12 @@ pub enum TopicReplication {
     Fixed(i32),
     /// Each partition should use the replica assignment from
     /// `PartitionAssignment`.
-    Variable(PartitionAssignment),
+    Variable(PartitionAssignments),
 }
 
 impl Default for TopicReplication {
     fn default() -> Self {
         Self::Fixed(1)
-    }
-}
-
-/// Configuration for a CreateTopic operation.
-#[derive(Debug, TypedBuilder)]
-pub struct NewTopic {
-    /// The name of the new topic.
-    #[builder(setter(into))]
-    pub name: String,
-    /// The initial number of partitions.
-    #[builder(default = 1)]
-    pub num_partitions: i32,
-    /// The initial replication configuration.
-    #[builder(default)]
-    pub replication: TopicReplication,
-    /// The initial configuration parameters for the topic.
-    #[builder(default)]
-    pub config: HashMap<String, String>,
-}
-
-impl<S> From<S> for NewTopic
-where
-    S: Into<String>,
-{
-    fn from(name: S) -> Self {
-        Self::builder().name(name).build()
     }
 }
 
@@ -211,6 +204,32 @@ where
     }
 }
 
+/// Configuration for a CreateTopic operation.
+#[derive(Debug, TypedBuilder)]
+pub struct NewTopic {
+    /// The name of the new topic.
+    #[builder(setter(into))]
+    pub name: String,
+    /// The initial number of partitions.
+    #[builder(default = 1)]
+    pub num_partitions: i32,
+    /// The initial replication configuration.
+    #[builder(default)]
+    pub replication: TopicReplication,
+    /// The initial configuration parameters for the topic.
+    #[builder(default)]
+    pub config: HashMap<String, String>,
+}
+
+impl<S> From<S> for NewTopic
+where
+    S: Into<String>,
+{
+    fn from(name: S) -> Self {
+        Self::builder().name(name).build()
+    }
+}
+
 impl NewTopic {
     /// Sets a new parameter in the initial topic configuration.
     pub fn insert<K, V>(mut self, key: K, value: V) -> Self
@@ -227,12 +246,12 @@ impl NewTopic {
         let repl = match &self.replication {
             TopicReplication::Fixed(n) => *n,
             TopicReplication::Variable(partitions) => {
-                if partitions.len() as i32 != self.num_partitions {
+                if partitions.0.len() as i32 != self.num_partitions {
                     return Err(KafkaError::AdminOpCreation(format!(
                         "replication configuration for topic '{}' assigns {} partition(s), \
                          which does not match the specified number of partitions ({})",
                         self.name,
-                        partitions.len(),
+                        partitions.0.len(),
                         self.num_partitions,
                     )));
                 }
@@ -259,7 +278,7 @@ impl NewTopic {
         let topic = unsafe { NativeNewTopic::from_ptr(topic) };
 
         if let TopicReplication::Variable(assignment) = &self.replication {
-            for (partition_id, broker_ids) in assignment.iter().enumerate() {
+            for (partition_id, broker_ids) in assignment.0.iter().enumerate() {
                 let res = unsafe {
                     rdkafka2_sys::rd_kafka_NewTopic_set_replica_assignment(
                         topic.ptr(),
@@ -304,6 +323,10 @@ where
 }
 
 impl DeleteTopic {
+    pub fn name(&self) -> &str {
+        &self.0
+    }
+
     pub(super) fn to_native(&self) -> Result<NativeDeleteTopic> {
         let name = CString::new(self.0.as_str())?;
         Ok(unsafe {

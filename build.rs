@@ -8,7 +8,7 @@ fn copy_librdkafka_suppressions() {
     let rdkafka2_sys_src_dir = metadata
         .packages
         .iter()
-        .find(|p| p.name == "rdkafka2-sys")
+        .find(|p| p.name.as_str() == "rdkafka2-sys")
         .expect("Dependency rdkafka2-sys not found")
         .manifest_path
         .parent()

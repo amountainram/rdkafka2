@@ -4,7 +4,7 @@ use crate::{
     ptr::NativePtr,
     util::{ErrBuf, cstr_to_owned},
 };
-use futures::TryFutureExt;
+use futures::{TryFutureExt, channel::oneshot};
 use rdkafka2_sys::{
     RDKafkaErrorCode, RDKafkaEventType, rd_kafka_AclBinding_error, rd_kafka_AclBinding_host,
     rd_kafka_AclBinding_name, rd_kafka_AclBinding_operation, rd_kafka_AclBinding_permission_type,
@@ -19,7 +19,6 @@ use rdkafka2_sys::{
     rd_kafka_event_DescribeAcls_result, rd_kafka_event_error,
 };
 use std::{ffi::CString, mem::ManuallyDrop};
-use tokio::sync::oneshot;
 use typed_builder::TypedBuilder;
 
 pub(crate) type NativeConfigResource = NativePtr<rd_kafka_ConfigResource_t>;

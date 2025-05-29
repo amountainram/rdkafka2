@@ -1,14 +1,16 @@
-use super::{ClientContext, DefaultClientContext, NativeClient};
+use super::{ClientContext, DefaultClientContext, NativeClient, Topic};
 use crate::{
     KafkaError, RDKafkaLogLevel, Timeout,
     config::{ClientConfig, NativeClientConfig},
     error::Result,
+    partitions::NewPartitions,
     ptr::{KafkaDrop, NativePtr},
-    topic::{DeleteTopic, NewTopic},
+    topic::{DeleteTopic, NewTopic, TopicSettings},
     util::{ArrayOfResults, ErrBuf, check_rdkafka_invalid_arg},
 };
 pub use acls::*;
 pub use cluster::*;
+use futures::channel::oneshot;
 use futures::{FutureExt, future::BoxFuture};
 use log::{error, info};
 use rdkafka2_sys::{
@@ -16,11 +18,11 @@ use rdkafka2_sys::{
     rd_kafka_event_t, rd_kafka_metadata_t, rd_kafka_queue_t, rd_kafka_t,
 };
 use std::{ffi::c_void, sync::Arc};
-use tokio::sync::oneshot;
 use topics::TopicResult;
 
 mod acls;
 mod cluster;
+mod partitions;
 mod topics;
 
 type NativeQueue = NativePtr<rd_kafka_queue_t>;
@@ -153,6 +155,7 @@ where
             match ret {
                 RDKafkaEventType::CreateTopicsResult
                 | RDKafkaEventType::DeleteTopicsResult
+                | RDKafkaEventType::CreatePartitionsResult
                 | RDKafkaEventType::DescribeAclsResult
                 | RDKafkaEventType::CreateAclsResult
                 | RDKafkaEventType::DeleteAclsResult
@@ -525,9 +528,8 @@ impl<C> AdminClient<C> {
         }
     }
 
-    pub fn blocking_metadata_for_topic<S, T>(&self, topic: S, timeout: T) -> Result<Metadata>
+    pub fn blocking_metadata_for_topic<T>(&self, topic: &Topic, timeout: T) -> Result<Metadata>
     where
-        S: AsRef<str>,
         T: Into<Timeout>,
     {
         const SELECTED_TOPIC: i32 = 0;
@@ -536,11 +538,10 @@ impl<C> AdminClient<C> {
             let mut metadata_ptr = std::ptr::null_mut() as *mut rd_kafka_metadata_t;
             let metadata_ptr_ptr = &mut metadata_ptr as *const *mut rd_kafka_metadata_t;
 
-            let native_topic = self.inner.register_topic(topic.as_ref())?;
             let err = rdkafka2_sys::rd_kafka_metadata(
                 self.inner.native_ptr(),
                 SELECTED_TOPIC,
-                native_topic.native_topic().ptr(),
+                topic.native_topic().ptr(),
                 metadata_ptr_ptr as *mut *const _,
                 timeout.into().as_millis(),
             );
@@ -576,27 +577,71 @@ where
     }
 
     #[cfg(feature = "tokio")]
-    pub fn metadata_for_topic<S, T>(
+    pub fn metadata_for_topic<T>(
         &self,
-        topic: S,
+        topic: Topic,
         timeout: T,
     ) -> impl Future<Output = Result<Metadata>> + Send
     where
-        S: Into<String>,
         T: Into<Timeout>,
     {
         use futures::TryFutureExt;
 
-        let topic = topic.into();
         let admin = self.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         let timeout = timeout.into();
         tokio::task::spawn_blocking(move || {
-            let _ = tx.send(admin.blocking_metadata_for_topic(topic, timeout));
+            let _ = tx.send(admin.blocking_metadata_for_topic(&topic, timeout));
         });
 
         rx.map_err(|_| KafkaError::Canceled)
             .and_then(|x| async move { x })
+    }
+
+    pub fn register_topic<T>(&self, topic: T) -> Result<Topic>
+    where
+        T: Into<TopicSettings>,
+    {
+        self.inner.register_topic(topic.into())
+    }
+
+    pub async fn create_partitions<I>(
+        &self,
+        partitions: I,
+        opts: AdminOptions,
+    ) -> Result<Vec<TopicResult>>
+    where
+        I: IntoIterator,
+        I::Item: Into<NewPartitions>,
+    {
+        let client = self.inner.native_ptr();
+        let (partitions, mut err_buf) = partitions.into_iter().map(Ok::<_, KafkaError>).try_fold(
+            (vec![], ErrBuf::new()),
+            |(mut partitions, mut err_buf), next| {
+                err_buf.clear();
+                let next: NewPartitions = next?.into();
+                partitions.push(next.to_native(&mut err_buf)?);
+                Ok::<_, KafkaError>((partitions, err_buf))
+            },
+        )?;
+
+        let (opts, rx) = opts.to_native(
+            rd_kafka_admin_op_t::RD_KAFKA_ADMIN_OP_CREATEPARTITIONS,
+            client,
+            &mut err_buf,
+        )?;
+
+        unsafe {
+            rdkafka2_sys::rd_kafka_CreatePartitions(
+                client,
+                partitions.as_c_array(),
+                partitions.len(),
+                opts.0.ptr(),
+                self.queue.ptr(),
+            );
+        }
+
+        partitions::handle_create_partitions_result(rx).await
     }
 }
 

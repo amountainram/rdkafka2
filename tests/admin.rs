@@ -3,16 +3,16 @@ use rand::{Rng, distr::Alphanumeric};
 use rdkafka2::{
     KafkaError, Timeout,
     client::{
-        AclBinding, AclBindingFilter, AdminClient, Cluster, Node, PartitionMetadata, ResourceType,
-        ResourceTypeRequest, TopicMetadata,
+        AclBinding, AclBindingFilter, AdminClient, Cluster, Node, ResourceType, ResourceTypeRequest,
     },
     config::ClientConfig,
+    partitions::NewPartitions,
 };
 use rdkafka2_sys::RDKafkaErrorCode;
 use rstest::{fixture, rstest};
 use std::time::Duration;
 
-mod common;
+pub mod common;
 
 fn generate_random_string(len: usize) -> String {
     rand::rng()
@@ -50,64 +50,93 @@ fn config() -> ClientConfig {
 #[tokio::test(flavor = "current_thread")]
 async fn create_and_delete_topics(config: ClientConfig, topic_names: Vec<String>) {
     let admin_client = common::test_admin_client(config);
-    admin_client
-        .create_topics(topic_names.clone(), Default::default())
-        .await
-        .expect("topics to be created");
+
+    common::test_create_topics(&admin_client, topic_names.as_slice()).await;
 
     let first = topic_names.first().unwrap();
     let metadata = admin_client
-        .metadata_for_topic(first, Duration::from_secs(2))
+        .metadata(Duration::from_secs(2))
         .await
         .expect("valid metadata");
-    assert_eq!(metadata.topics.len(), 1);
+    let topic_metadata = metadata.topic(first).expect("topic metadata should exist");
+    assert_eq!(topic_metadata.name.as_str(), first.as_str());
+    assert_eq!(topic_metadata.partitions.len(), 1);
+    let partition_metadata = topic_metadata
+        .partitions
+        .first()
+        .expect("partition metadata should exist");
+    assert_eq!(*partition_metadata.id, 0);
+
+    common::test_delete_topics(&admin_client, topic_names.as_slice()).await;
+
+    let topic = admin_client.register_topic(first).unwrap();
     assert_eq!(
-        metadata.topics.first(),
-        Some(
-            &TopicMetadata::builder()
-                .name(first)
-                .partitions(vec![
-                    PartitionMetadata::builder()
-                        .id(0)
-                        .leader(1)
-                        .replicas(vec![1])
-                        .isrs(vec![1])
-                        .build()
-                ])
-                .build()
-        )
-    );
-
-    admin_client
-        .delete_topics(topic_names.clone(), Default::default())
-        .await
-        .expect("topics to be created");
-
-    let (_, error) = (|(admin_client, topic): (AdminClient, String)| async move {
-        let result = match admin_client
-            .metadata_for_topic(&topic, Duration::from_secs(2))
+        admin_client
+            .metadata_for_topic(topic.clone(), Duration::from_secs(2))
             .await
-        {
-            Err(err) => Ok(err),
-            Ok(m) => Err(m),
-        };
-
-        ((admin_client, topic), result)
-    })
-    .retry(ConstantBuilder::default())
-    .context((admin_client, first.to_string()))
-    .await;
-
-    assert_eq!(
-        error.unwrap(),
+            .unwrap_err(),
         KafkaError::MetadataFetch(RDKafkaErrorCode::UnknownTopicOrPartition)
     );
 }
 
 #[rstest]
 #[tokio::test(flavor = "current_thread")]
+async fn update_partitions_and_assignments(config: ClientConfig) {
+    let admin_client = common::test_admin_client(config);
+
+    let topic_name = generate_random_string(10);
+
+    common::test_create_topics(&admin_client, vec![&topic_name]).await;
+
+    let topic = admin_client.register_topic(&topic_name).unwrap();
+    let metadata = admin_client
+        .metadata_for_topic(topic, Duration::from_secs(2))
+        .await
+        .expect("valid metadata");
+    let broker_ids = metadata.broker_ids();
+    let topic_metadata = metadata.topic(&topic_name).expect("topic metadata").clone();
+    let new_partitions = NewPartitions::builder()
+        .topic_metadata(topic_metadata)
+        .partitions(vec![broker_ids.clone(), broker_ids.clone(), broker_ids])
+        .build();
+
+    admin_client
+        .create_partitions(vec![new_partitions], Default::default())
+        .await
+        .expect("partitions to be created")
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("partitions creation to succeed");
+
+    let metadata = common::retrieve_metadata(&admin_client, |m| {
+        m.topic(&topic_name)
+            .expect("topic metadata should exist")
+            .partitions
+            .len()
+            > 1
+    })
+    .await;
+
+    let topic_metadata = metadata
+        .topic(&topic_name)
+        .expect("topic metadata should exist")
+        .clone();
+    assert_eq!(topic_metadata.partitions.len(), 4);
+    for (index, partition) in topic_metadata.partitions.iter().enumerate() {
+        assert_eq!(*partition.id, index as i32);
+        assert_eq!(*partition.leader, 1);
+        assert_eq!(partition.replicas.len(), 1);
+        assert_eq!(partition.isrs.len(), 1);
+    }
+
+    common::test_delete_topics(&admin_client, vec![&topic_name]).await;
+}
+
+#[rstest]
+#[tokio::test(flavor = "current_thread")]
 async fn retrieve_configs(config: ClientConfig) {
     let admin_client = common::test_admin_client(config);
+
     let resource = admin_client
         .describe_resource("1", ResourceTypeRequest::Broker, Default::default())
         .await
@@ -120,6 +149,7 @@ async fn retrieve_configs(config: ClientConfig) {
 #[tokio::test(flavor = "current_thread")]
 async fn describe_cluster(config: ClientConfig) {
     let admin_client = common::test_admin_client(config);
+
     let cluster = admin_client
         .describe_cluster(Default::default())
         .await

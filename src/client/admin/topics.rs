@@ -3,13 +3,12 @@ use crate::{
     error::{KafkaError, Result},
     util::cstr_to_owned,
 };
-use futures::TryFutureExt;
+use futures::{TryFutureExt, channel::oneshot};
 use rdkafka2_sys::{RDKafkaErrorCode, RDKafkaEventType, rd_kafka_topic_result_t};
-use tokio::sync::oneshot;
 
 pub type TopicResult = Result<String, (String, RDKafkaErrorCode)>;
 
-fn build_topic_results(
+pub(super) fn build_topic_results(
     topics: *const *const rd_kafka_topic_result_t,
     n: usize,
 ) -> Vec<TopicResult> {

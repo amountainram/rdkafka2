@@ -13,7 +13,7 @@ use rstest::{fixture, rstest};
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
-mod common;
+pub mod common;
 
 #[fixture]
 fn config() -> ClientConfig {

@@ -8,30 +8,41 @@ use crate::{
     ptr::NativePtr,
     util::cstr_to_owned,
 };
-use futures::TryFutureExt;
+use futures::{TryFutureExt, channel::oneshot};
 use rdkafka2_sys::{
     RDKafkaErrorCode, RDKafkaEventType, rd_kafka_AclOperation_t, rd_kafka_ConfigResource_t,
     rd_kafka_Node_t, rd_kafka_ResourceType_t, rd_kafka_metadata_t,
 };
-use std::{collections::HashMap, ffi::CString};
-use tokio::sync::oneshot;
+use std::{collections::HashMap, ffi::CString, ops::Deref};
 use typed_builder::TypedBuilder;
 
 pub(super) type NativeMetadata = NativePtr<rd_kafka_metadata_t>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct BrokerId(pub(crate) i32);
+
+impl Deref for BrokerId {
+    type Target = i32;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 #[derive(Debug, Clone, TypedBuilder, PartialEq, Eq)]
 pub struct BrokerMetadata {
-    pub id: i32,
+    pub id: BrokerId,
     pub host: String,
     pub port: u16,
 }
 
 #[derive(Debug, Clone, TypedBuilder, PartialEq, Eq)]
 pub struct PartitionMetadata {
-    pub id: i32,
-    pub leader: i32,
+    pub id: BrokerId,
+    pub leader: BrokerId,
     #[builder(default)]
-    pub replicas: Vec<i32>,
+    pub replicas: Vec<BrokerId>,
     #[builder(default)]
     pub isrs: Vec<i32>,
 }
@@ -55,6 +66,20 @@ pub struct Metadata {
     pub orig_broker_name: String,
 }
 
+impl Metadata {
+    pub fn brokers(&self) -> &[BrokerMetadata] {
+        &self.brokers
+    }
+
+    pub fn broker_ids(&self) -> Vec<BrokerId> {
+        self.brokers().iter().map(|b| b.id).collect::<Vec<_>>()
+    }
+
+    pub fn topic(&self, name: &str) -> Option<&TopicMetadata> {
+        self.topics.iter().find(|t| t.name == name)
+    }
+}
+
 pub(super) fn handle_metadata_result(
     value: *const rd_kafka_metadata_t,
 ) -> Result<Metadata, RDKafkaErrorCode> {
@@ -66,7 +91,7 @@ pub(super) fn handle_metadata_result(
         unsafe {
             let broker = *metadata.brokers.add(i);
             brokers.push(BrokerMetadata {
-                id: broker.id,
+                id: BrokerId(broker.id),
                 host: cstr_to_owned(broker.host),
                 port: broker.port as u16,
             });
@@ -93,7 +118,7 @@ pub(super) fn handle_metadata_result(
                 let replicas_cnt = partition.replica_cnt as usize;
                 let mut replicas = Vec::with_capacity(replicas_cnt);
                 for i in 0..replicas_cnt {
-                    replicas.push(*partition.replicas.add(i));
+                    replicas.push(BrokerId(*partition.replicas.add(i)));
                 }
                 let isrs_cnt = partition.replica_cnt as usize;
                 let mut isrs = Vec::with_capacity(isrs_cnt);
@@ -101,8 +126,8 @@ pub(super) fn handle_metadata_result(
                     isrs.push(*partition.isrs.add(i));
                 }
                 partitions.push(PartitionMetadata {
-                    id: partition.id,
-                    leader: partition.leader,
+                    id: BrokerId(partition.id),
+                    leader: BrokerId(partition.leader),
                     replicas,
                     isrs,
                 });

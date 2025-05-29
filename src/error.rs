@@ -66,6 +66,7 @@ pub enum KafkaError {
     /// Mock Cluster error
     MockCluster(RDKafkaErrorCode),
 
+    JoinError,
     UnknownEvent(i32),
     UnknownResource(i32),
     UnknownAclOperation(i32),

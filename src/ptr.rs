@@ -55,6 +55,11 @@ unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_NewTopic_t {
     const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_NewTopic_destroy;
 }
 
+unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_NewPartitions_t {
+    const TYPE: &'static str = "rd_kafka_NewPartitions_t";
+    const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_NewPartitions_destroy;
+}
+
 unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_DeleteTopic_t {
     const TYPE: &'static str = "rd_kafka_DeleteTopic_t";
     const DROP: unsafe extern "C" fn(*mut Self) = rdkafka2_sys::rd_kafka_DeleteTopic_destroy;
