@@ -114,6 +114,25 @@ pub trait Partitioner<D = ()>: Fn(&[u8], i32, D) -> i32 + Send + Sync + 'static 
 
 impl<D, F> Partitioner<D> for F where F: Fn(&[u8], i32, D) -> i32 + Send + Sync + 'static {}
 
+#[derive(Debug, Default)]
+pub enum PartitionerSelector<F = fn(&[u8], i32, ()) -> i32> {
+    Random,
+    Consistent,
+    #[default]
+    ConsistentRandom,
+    Murmur2,
+    Murmur2Random,
+    Fnv1a,
+    Fnv1aRandom,
+    Custom(F),
+}
+
+impl<Fn> From<Fn> for PartitionerSelector<Fn> {
+    fn from(partitioner: Fn) -> Self {
+        Self::Custom(partitioner)
+    }
+}
+
 /// Configuration for a CreateTopic operation.
 #[derive(TypedBuilder)]
 pub struct TopicSettings<D = (), F = fn(&[u8], i32, D) -> i32>
@@ -128,8 +147,8 @@ where
     #[builder(default, setter(into))]
     pub(crate) configuration: TopicConfig,
     /// A custom partitioner function for the topic.
-    #[builder(default, setter(strip_option, suffix = "_with_opaque"))]
-    pub(crate) partitioner: Option<F>,
+    #[builder(default, setter(strip_option, suffix = "_selector"))]
+    pub(crate) partitioner: Option<PartitionerSelector<F>>,
     #[builder(default, setter(skip))]
     _marker: PhantomData<D>,
 }
@@ -150,14 +169,18 @@ impl<__name, __configuration>
     ) -> TopicSettingsBuilder<
         (),
         Box<dyn Partitioner>,
-        (__name, __configuration, (Option<Box<dyn Partitioner>>,)),
+        (
+            __name,
+            __configuration,
+            (Option<PartitionerSelector<Box<dyn Partitioner>>>,),
+        ),
     >
     where
         FIn: Fn(&[u8], i32) -> i32 + Send + Sync + 'static,
     {
         let partitioner: Box<dyn Partitioner> =
             Box::new(move |key, partition, _| partitioner(key, partition));
-        let partitioner = (Some(partitioner),);
+        let partitioner = (Some(PartitionerSelector::Custom(partitioner)),);
         let (name, configuration, ()) = self.fields;
         TopicSettingsBuilder {
             fields: (name, configuration, partitioner),

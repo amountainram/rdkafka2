@@ -5,7 +5,7 @@ use crate::{
     error::{KafkaError, Result},
     log::RDKafkaSyslogLogLevel,
     ptr::NativePtr,
-    topic::{NativeTopic, NativeTopicConf, Partitioner, TopicSettings},
+    topic::{NativeTopic, NativeTopicConf, Partitioner, PartitionerSelector, TopicSettings},
     util::{ErrBuf, cstr_to_owned},
 };
 use once_cell::sync::Lazy;
@@ -338,6 +338,13 @@ impl<C> NativeClient<C> {
     {
         unsafe { rdkafka2_sys::rd_kafka_purge(self.inner.ptr(), timeout.into().as_millis()).into() }
     }
+
+    pub fn partition_available(&self, topic: &Topic, partition: i32) -> bool {
+        unsafe {
+            rdkafka2_sys::rd_kafka_topic_partition_available(topic.native_topic().ptr(), partition)
+                != 0
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -452,20 +459,46 @@ impl<C> NativeClient<C> {
 
                 Ok::<_, KafkaError>(conf)
             })?;
-        let partitioner = if let Some(partitioner) = partitioner.take() {
-            let partitioner: Box<Box<dyn Partitioner<D>>> = Box::new(Box::new(partitioner));
-            let partitioner = Box::into_raw(partitioner) as *mut c_void;
+
+        let partitioner = partitioner.take().map(|partitioner_selector| {
+            let raw_partitioner = match partitioner_selector {
+                PartitionerSelector::Random => {
+                    rdkafka2_sys::rd_kafka_msg_partitioner_random as *mut c_void
+                }
+                PartitionerSelector::Consistent => {
+                    rdkafka2_sys::rd_kafka_msg_partitioner_consistent as *mut c_void
+                }
+                PartitionerSelector::ConsistentRandom => {
+                    rdkafka2_sys::rd_kafka_msg_partitioner_consistent_random as *mut c_void
+                }
+                PartitionerSelector::Murmur2 => {
+                    rdkafka2_sys::rd_kafka_msg_partitioner_murmur2 as *mut c_void
+                }
+                PartitionerSelector::Murmur2Random => {
+                    rdkafka2_sys::rd_kafka_msg_partitioner_murmur2_random as *mut c_void
+                }
+                PartitionerSelector::Fnv1a => {
+                    rdkafka2_sys::rd_kafka_msg_partitioner_fnv1a as *mut c_void
+                }
+                PartitionerSelector::Fnv1aRandom => {
+                    rdkafka2_sys::rd_kafka_msg_partitioner_fnv1a_random as *mut c_void
+                }
+                PartitionerSelector::Custom(partitioner) => {
+                    let partitioner: Box<Box<dyn Partitioner<D>>> = Box::new(Box::new(partitioner));
+                    Box::into_raw(partitioner) as *mut c_void
+                }
+            };
+
             unsafe {
-                rdkafka2_sys::rd_kafka_topic_conf_set_opaque(conf.ptr(), partitioner);
+                rdkafka2_sys::rd_kafka_topic_conf_set_opaque(conf.ptr(), raw_partitioner);
                 rdkafka2_sys::rd_kafka_topic_conf_set_partitioner_cb(
                     conf.ptr(),
                     Some(custom_partitioner::<D>),
                 );
             }
-            Some(partitioner)
-        } else {
-            None
-        };
+
+            raw_partitioner
+        });
 
         let topic_name = CString::new(name.as_str()).map_err(KafkaError::Nul)?;
         let topic = unsafe { self.create_topic(&topic_name, Some(conf)) }?;

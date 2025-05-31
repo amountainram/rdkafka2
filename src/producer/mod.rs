@@ -108,6 +108,10 @@ impl<C> Producer<C> {
     {
         self.producer.client.register_topic(topic.into())
     }
+
+    pub fn partition_available(&self, topic: &Topic, partition: i32) -> bool {
+        self.producer.client.partition_available(topic, partition)
+    }
 }
 
 impl<C> Producer<C>

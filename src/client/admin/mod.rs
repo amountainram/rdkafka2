@@ -554,6 +554,49 @@ impl<C> AdminClient<C> {
                 .map_err(KafkaError::MetadataFetch)
         }
     }
+
+    pub async fn create_partitions<I>(
+        &self,
+        partitions: I,
+        opts: AdminOptions,
+    ) -> Result<Vec<TopicResult>>
+    where
+        I: IntoIterator,
+        I::Item: Into<NewPartitions>,
+    {
+        let client = self.inner.native_ptr();
+        let (partitions, mut err_buf) = partitions.into_iter().map(Ok::<_, KafkaError>).try_fold(
+            (vec![], ErrBuf::new()),
+            |(mut partitions, mut err_buf), next| {
+                err_buf.clear();
+                let next: NewPartitions = next?.into();
+                partitions.push(next.to_native(&mut err_buf)?);
+                Ok::<_, KafkaError>((partitions, err_buf))
+            },
+        )?;
+
+        let (opts, rx) = opts.to_native(
+            rd_kafka_admin_op_t::RD_KAFKA_ADMIN_OP_CREATEPARTITIONS,
+            client,
+            &mut err_buf,
+        )?;
+
+        unsafe {
+            rdkafka2_sys::rd_kafka_CreatePartitions(
+                client,
+                partitions.as_c_array(),
+                partitions.len(),
+                opts.0.ptr(),
+                self.queue.ptr(),
+            );
+        }
+
+        partitions::handle_create_partitions_result(rx).await
+    }
+
+    pub fn partition_available(&self, topic: &Topic, partition: i32) -> bool {
+        self.inner.partition_available(topic, partition)
+    }
 }
 
 impl<C> AdminClient<C>
@@ -602,45 +645,6 @@ where
         T: Into<TopicSettings>,
     {
         self.inner.register_topic(topic.into())
-    }
-
-    pub async fn create_partitions<I>(
-        &self,
-        partitions: I,
-        opts: AdminOptions,
-    ) -> Result<Vec<TopicResult>>
-    where
-        I: IntoIterator,
-        I::Item: Into<NewPartitions>,
-    {
-        let client = self.inner.native_ptr();
-        let (partitions, mut err_buf) = partitions.into_iter().map(Ok::<_, KafkaError>).try_fold(
-            (vec![], ErrBuf::new()),
-            |(mut partitions, mut err_buf), next| {
-                err_buf.clear();
-                let next: NewPartitions = next?.into();
-                partitions.push(next.to_native(&mut err_buf)?);
-                Ok::<_, KafkaError>((partitions, err_buf))
-            },
-        )?;
-
-        let (opts, rx) = opts.to_native(
-            rd_kafka_admin_op_t::RD_KAFKA_ADMIN_OP_CREATEPARTITIONS,
-            client,
-            &mut err_buf,
-        )?;
-
-        unsafe {
-            rdkafka2_sys::rd_kafka_CreatePartitions(
-                client,
-                partitions.as_c_array(),
-                partitions.len(),
-                opts.0.ptr(),
-                self.queue.ptr(),
-            );
-        }
-
-        partitions::handle_create_partitions_result(rx).await
     }
 }
 
