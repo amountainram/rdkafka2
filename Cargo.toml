@@ -43,7 +43,7 @@ tracing = { version = "0.1", optional = true }
 typed-builder = "0.21"
 
 [dev-dependencies]
-backon = "1.5.1"
+backon = "1.5.2"
 env_logger = "0.11.8"
 rand = "0.9.1"
 rstest = "0.25.0"
