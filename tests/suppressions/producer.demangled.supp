@@ -6,7 +6,7 @@
    fun:std::thread::Thread::new
    fun:std::thread::current::init_current
    fun:std::sync::mpmc::context::Context::new
-   fun:std::sys::thread_local::native::lazy::Storage<T,D>::initialize
+   fun:std::sys::thread_local::native::lazy::Storage<T,D>::get_or_init_slow
    fun:std::sync::mpmc::list::Channel<T>::recv
    fun:test::console::run_tests_console
    fun:test::test_main
