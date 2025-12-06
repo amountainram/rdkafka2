@@ -62,6 +62,15 @@ pub(crate) fn get_conf_default_value(key: &str) -> Result<String> {
 }
 
 /// A native rdkafka-sys client config.
+///
+/// This struct is a thin wrapper around a pointer to an `rd_kafka_conf_t` object.
+/// It provides methods to get configuration properties and
+/// returns `librdkafka` defaults on unset properties.
+///
+/// To create a `NativeClientConfig`, use the `TryFrom<ClientConfig>` implementation.
+/// This will convert a generic `ClientConfig` into a `NativeClientConfig`
+/// that can be used with `librdkafka`.
+#[derive(Debug)]
 pub struct NativeClientConfig {
     ptr: NativePtr<rd_kafka_conf_t>,
 }
@@ -78,10 +87,13 @@ impl NativeClientConfig {
         }
     }
 
+    /// Returns the raw pointer to the underlying `rd_kafka_conf_t` object.
     pub fn ptr(&self) -> *mut rd_kafka_conf_t {
         self.ptr.ptr()
     }
 
+    /// Gets the value of a configuration property.
+    /// If the property is not set, returns the default value from `librdkafka`.
     pub fn get(&self, key: &str) -> Result<String> {
         get_conf_property(self.ptr(), key)
     }
@@ -106,7 +118,29 @@ impl NativeClientConfig {
     }
 }
 
-/// Generic Kafka client configuration.
+/// Generic Kafka client configuration that can be converted into a
+/// [`NativeClientConfig`] for use with `librdkafka`.
+///
+/// When `serde` feature is on, this struct can be deserialized using the
+/// `serde` crate.
+///
+/// Config key/values are defined by
+/// [`librdkafka` configuration properties](https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html).
+///
+/// ```
+/// use rdkafka2::config::{ClientConfig, NativeClientConfig};
+///
+/// let config = ClientConfig::from_iter([
+///    ("bootstrap.servers", "localhost:9092"),
+///    ("allow.auto.create.topics", "false"),
+///    ("log_level", "7"),
+///    ("debug", "all"),
+/// ]);
+///
+/// let native_client = NativeClientConfig::try_from(config).unwrap();
+/// assert_eq!(native_client.get("bootstrap.servers").unwrap(), "localhost:9092");
+/// assert_eq!(native_client.get("client.id").unwrap(), "rdkafka");
+/// ```
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(::serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
@@ -115,6 +149,7 @@ pub struct ClientConfig {
 }
 
 impl ClientConfig {
+    /// Gets a reference to the value corresponding to the key.
     pub fn get<Q>(&self, k: &Q) -> Option<&String>
     where
         String: Eq + Hash + Borrow<Q>,
@@ -123,6 +158,8 @@ impl ClientConfig {
         self.inner.get(k)
     }
 
+    /// Sets a key-value pair in the configuration.
+    /// If the key already exists, its value is updated.
     pub fn set<Q, R>(&mut self, key: Q, value: R) -> &mut Self
     where
         Q: Into<String>,
@@ -132,6 +169,7 @@ impl ClientConfig {
         self
     }
 
+    /// Returns an iterator over the key-value pairs in the configuration.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &String)> {
         self.inner.iter()
     }

@@ -1,8 +1,7 @@
 use super::{DefaultProducerContext, Producer, ProducerContext};
-use crate::{config::ClientConfig, error::Result, log::RDKafkaLogLevel};
+use crate::{config::ClientConfig, error::Result, log::RDKafkaLogLevel, util::Optional};
 use futures::{FutureExt, future::BoxFuture};
 use std::{marker::PhantomData, sync::Arc};
-use typed_builder::Optional;
 
 pub struct ProducerBuilder<
     C = DefaultProducerContext,

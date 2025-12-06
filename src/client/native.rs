@@ -347,6 +347,11 @@ impl<C> NativeClient<C> {
     }
 }
 
+/// The handler of a Kafka topic registered successfully
+/// in a client.
+///
+/// It wraps with reference counting the native topic
+/// and the topic configuration.
 #[derive(Debug)]
 pub struct Topic<D = ()> {
     inner: Arc<TopicRegistration>,

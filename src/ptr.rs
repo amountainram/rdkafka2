@@ -96,7 +96,7 @@ unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_AclBinding_t {
     const DROP: unsafe extern "C" fn(*mut Self) = rd_kafka_AclBinding_destroy;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[repr(transparent)]
 pub(crate) struct NativePtr<T>
 where

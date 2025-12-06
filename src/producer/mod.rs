@@ -17,19 +17,68 @@ mod builder;
 
 static DEFAULT_PRODUCER_POLL_INTERVAL_MS: u64 = 100;
 
+/// A context trait for the Kafka producer.
+///
+/// It holds callbacks for asynchronous events that happen inside the
+/// producer. Most notably the delivery callback that is called when a message
+/// is successfully delivered or permanently failed.
+///
+/// The default implementation is [`DefaultProducerContext`] which does nothing
+/// beside polling the internal queue at a regular interval of 100 milliseconds.
+///
+/// A future based implementation can be obtained using a queue implementing this
+/// trait:
+///
+/// ```
+/// use rdkafka2::{
+///     client::ClientContext,
+///     message::{DeliveryResult, OwnedMessage},
+///     producer::{ProducerContext},
+///     KafkaError,
+/// };
+/// use tokio::sync::mpsc;
+///
+/// type OwnedDeliveryResult = Result<OwnedMessage, (KafkaError, OwnedMessage)>;
+///
+/// struct DeliveryStreamContext {
+///     tx: mpsc::UnboundedSender<OwnedDeliveryResult>,
+/// }
+///
+/// impl ClientContext for DeliveryStreamContext {}
+///
+/// impl ProducerContext for DeliveryStreamContext {
+///     type DeliveryOpaque = ();
+///     
+///     fn delivery_message_callback(&self, dr: DeliveryResult<'_>, _: Self::DeliveryOpaque) {
+///         let report = match dr {
+///             Ok(m) => m.try_detach().map(Ok),
+///             Err((err, msg)) => msg.try_detach().map(|msg| Err((err, msg))),
+///         }
+///         .expect("no UTF8 errors");
+///         self.tx.send(report).expect("msg to be sent");
+///     }
+/// }
+/// ```
 pub trait ProducerContext: ClientContext {
     /// A `DeliveryOpaque` is a user-defined structure that will be passed to
     /// the producer when producing a message, and returned to the `delivery`
     /// method once the message has been delivered, or failed to.
     type DeliveryOpaque: IntoOpaque + Default;
 
+    /// The interval at which the internal producer queue is polled to trigger
+    /// delivery of enqueued messages to the Kafka broker.
+    ///
+    /// It defaults to 100 milliseconds poll intervals.
     fn poll_interval() -> Duration {
         Duration::from_millis(DEFAULT_PRODUCER_POLL_INTERVAL_MS)
     }
 
+    /// The callback that is called when a message has been delivered
+    /// successfully or permanently failed.
     fn delivery_message_callback(&self, msg: DeliveryResult<'_>, opaque: Self::DeliveryOpaque);
 }
 
+/// The default producer context that does nothing.
 #[derive(Default, Clone)]
 pub struct DefaultProducerContext(DefaultClientContext);
 
@@ -43,7 +92,7 @@ impl ProducerContext for DefaultProducerContext {
 
 struct ProducerClient<C = DefaultProducerContext> {
     client: NativeClient<C>,
-    #[cfg(feature = "tokio")]
+    #[cfg(all(feature = "producer-polling", feature = "tokio"))]
     _poll_task_handle: Arc<tokio::task::JoinHandle<()>>,
 }
 
@@ -52,8 +101,6 @@ impl<C> std::fmt::Debug for ProducerClient<C> {
         f.debug_struct("ProducerClient").finish()
     }
 }
-
-impl<C> ProducerClient<C> {}
 
 impl<C> ClientContext for ProducerClient<C> where C: ProducerContext {}
 
@@ -68,6 +115,59 @@ where
     }
 }
 
+/// A Kafka producer.
+///
+/// The producer is used to send messages to Kafka topics. It is created using
+/// the [`Producer::builder`] method.
+///
+/// To create a producer four ingredients are needed:
+/// 1. A type that implements the [`ProducerContext`] trait.
+/// 2. An optional [`ClientConfig`] with the necessary configuration properties.
+/// 3. An optional log level ([`RDKafkaLogLevel`]) to control the verbosity of the logging.
+/// 4. An optional shutdown signal to gracefully stop the internal polling loop.
+///
+/// The role of the `ProducerContext` is to set callbacks inside the producer.
+/// Most notably the delivery callback that is called when a message is
+/// successfully delivered or permanently failed.
+///
+/// On message [`Producer::produce`] or [`Producer::send`], the message is
+/// enqueued in an internal buffer and the function returns immediately.
+/// The actual delivery to the Kafka broker happens asynchronously in the
+/// background. The delivery status is reported through the delivery callback
+/// set in the `ProducerContext`.
+///
+/// ```rust,no_run
+/// use rdkafka2::{
+///     config::ClientConfig,
+///     message::BaseRecord,
+///     producer::{
+///         DefaultProducerContext,
+///         Producer,
+///     }
+/// };
+///
+/// let config = ClientConfig::from_iter([
+///     ("bootstrap.servers", "localhost:9092"),
+///     ("allow.auto.create.topics", "false"),
+/// ]);
+/// let producer = Producer::builder()
+///     .config(config)
+///     .context(DefaultProducerContext::default())
+///     .try_build()
+///     .unwrap();
+///
+/// let topic = producer
+///     .register_topic("my_topic")
+///     .expect("topic to be registered");
+///
+/// let record = BaseRecord::builder()
+///     .key(r#"{"id":"1"}"#.as_bytes())
+///     .payload(r#"{"id":"2"}"#.as_bytes())
+///     .topic(&topic)
+///     .build();
+/// producer.send(record).expect("message to be produced");
+/// producer.flush(std::time::Duration::from_secs(1));
+/// ```
 #[derive(Debug)]
 pub struct Producer<C = DefaultProducerContext> {
     producer: Arc<Pin<Box<ProducerClient<C>>>>,
@@ -75,6 +175,8 @@ pub struct Producer<C = DefaultProducerContext> {
 }
 
 impl<C> Producer<C> {
+    /// Polls the internal producer queue to trigger delivery of enqueued messages
+    /// to the Kafka broker.
     pub fn poll<T>(&self, timeout: T) -> u64
     where
         T: Into<Timeout>,
@@ -82,6 +184,8 @@ impl<C> Producer<C> {
         self.producer.client.poll(timeout)
     }
 
+    /// Blocks at most for `timeout` or until all messages in the internal
+    /// producer queue are delivered to the Kafka broker.
     pub fn flush<T>(&self, timeout: T) -> RDKafkaErrorCode
     where
         T: Into<Timeout>,
@@ -89,6 +193,8 @@ impl<C> Producer<C> {
         self.producer.client.flush(timeout)
     }
 
+    /// Purges any outstanding messages in the internal producer queue.
+    /// This will drop any undelivered messages.
     pub fn purge<T>(&self, timeout: T) -> RDKafkaErrorCode
     where
         T: Into<Timeout>,
@@ -96,10 +202,18 @@ impl<C> Producer<C> {
         self.producer.client.purge(timeout)
     }
 
+    /// Returns a reference to the producer context.
     pub fn context(&self) -> &C {
         self.producer.client.context()
     }
 
+    /// Registers a topic with the producer.
+    ///
+    /// This registration is needed due to the underlying `librdkafka` API.
+    /// When a topic is registered by name, with optional settings, any
+    /// usage of its name will carry along those settings.
+    ///
+    /// Register a topic is a locking operation.
     pub fn register_topic<D, F, T>(&self, topic: T) -> Result<Topic<D>>
     where
         D: IntoOpaque,
@@ -109,6 +223,7 @@ impl<C> Producer<C> {
         self.producer.client.register_topic(topic.into())
     }
 
+    /// Checks if a partition is available for producing messages.
     pub fn partition_available(&self, topic: &Topic, partition: i32) -> bool {
         self.producer.client.partition_available(topic, partition)
     }
@@ -131,6 +246,17 @@ where
         producer.delivery_message_callback(result, delivery_opaque);
     }
 
+    /// Enqueue a message for delivery to the Kafka broker.
+    /// The message is enqueued in an internal buffer and the function
+    /// returns immediately.
+    ///
+    /// The production queue is NOT polled by this method. Use [`Producer::poll`]
+    /// to poll the queue and trigger delivery of enqueued messages or combine
+    /// both with a single call to [`Producer::send`].
+    ///
+    /// This method is useful when producing a batch of messages
+    /// and then polling the queue once to trigger delivery of all
+    /// enqueued messages.
     pub fn produce<'a>(
         &self,
         mut record: BaseRecord<'a, C::DeliveryOpaque>,
@@ -184,6 +310,8 @@ where
         }
     }
 
+    /// Enqueue a message for delivery to the Kafka broker and immediately
+    /// poll the internal queue to trigger delivery of enqueued messages.
     pub fn send<'a>(
         &self,
         record: BaseRecord<'a, C::DeliveryOpaque>,
@@ -234,7 +362,7 @@ where
             .log_level(log_level.unwrap_or(RDKafkaLogLevel::Info))
             .try_build()?;
 
-        #[cfg(feature = "tokio")]
+        #[cfg(all(feature = "producer-polling", feature = "tokio"))]
         let poll_handle = {
             use futures::StreamExt;
             use tokio::{spawn, time::interval};
@@ -254,7 +382,7 @@ where
 
         let mut producer = Box::pin(ProducerClient {
             client: native_client,
-            #[cfg(feature = "tokio")]
+            #[cfg(all(feature = "producer-polling", feature = "tokio"))]
             _poll_task_handle: poll_handle.into(),
         });
 
@@ -266,6 +394,7 @@ where
             producer: Arc::new(producer),
             _ptr: Arc::new(Pin::new(ptr)),
         };
+
         Ok(box_producer.clone())
     }
 }

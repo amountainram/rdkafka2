@@ -12,14 +12,11 @@ use rdkafka2_sys::{
 use std::{collections::HashMap, ffi::CString, fmt, marker::PhantomData};
 use typed_builder::TypedBuilder;
 
-#[derive(Debug, Clone)]
+/// A handle to a native `librdkafka` topic object.
+///
+/// Used for topic registration in a producer or consumer.
+#[derive(Debug)]
 pub struct NativeTopic(NativePtr<rd_kafka_topic_t>);
-
-impl From<&NativeTopic> for NativeTopic {
-    fn from(value: &NativeTopic) -> Self {
-        value.clone()
-    }
-}
 
 impl NativeTopic {
     pub(crate) fn ptr(&self) -> *mut rd_kafka_topic_t {
@@ -227,7 +224,7 @@ where
     }
 }
 
-/// Configuration for a CreateTopic operation.
+/// Configuration for an admin CreateTopic operation.
 #[derive(Debug, TypedBuilder)]
 pub struct NewTopic {
     /// The name of the new topic.

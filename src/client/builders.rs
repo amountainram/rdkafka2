@@ -3,10 +3,10 @@ use crate::{
     RDKafkaLogLevel,
     config::{ClientConfig, NativeClientConfig},
     error::{KafkaError, Result},
+    util::Optional,
 };
 use rdkafka2_sys::RDKafkaType;
 use std::{marker::PhantomData, sync::Arc};
-use typed_builder::Optional;
 
 #[doc(hidden)]
 pub trait ResultOptional<T, E> {

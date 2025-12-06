@@ -1,3 +1,5 @@
+#![cfg(feature = "tokio")]
+
 use backon::{ConstantBuilder, RetryableWithContext};
 use rdkafka2::{
     RDKafkaLogLevel,

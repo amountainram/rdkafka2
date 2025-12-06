@@ -4,7 +4,9 @@ set -e;
 
 source ${TEST_E2E_OUTPUT};
 
-cargo_args="--no-run --features=sasl,ssl --release --message-format=json"
+cargo_features="sasl,ssl,producer-polling,tokio"
+
+cargo_args="--no-run --features=$cargo_features --release --message-format=json"
 executables=$(cargo test --tests $cargo_args \
   | jq -r 'select(.reason == "compiler-artifact" and .profile.test == true) | .executable' \
   | grep -v null \

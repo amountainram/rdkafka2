@@ -1,3 +1,5 @@
+#![cfg(all(feature = "producer-polling", feature = "tokio"))]
+
 use futures::{Stream, TryStreamExt};
 use rand::{Rng, distr::Alphanumeric};
 use rdkafka2::{
