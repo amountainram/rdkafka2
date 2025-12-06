@@ -215,6 +215,6 @@ mod tests {
 
     #[test]
     fn version() {
-        assert_eq!(rdkafka_version(), (34078975, "2.8.0".into()));
+        assert_eq!(rdkafka_version(), (34341375, "2.12.1".into()));
     }
 }
