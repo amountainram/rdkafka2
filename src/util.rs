@@ -71,6 +71,10 @@ pub(crate) unsafe fn cstr_to_owned(cstr: *const c_char) -> String {
 ///
 /// `cstr` must point to a valid, null-terminated C string.
 pub(crate) unsafe fn cstr_to_owned_option(cstr: *const c_char) -> Option<String> {
+    if cstr.is_null() {
+        return None;
+    }
+
     unsafe {
         (*cstr != b'\0' as i8).then(|| {
             CStr::from_ptr(cstr as *const c_char)

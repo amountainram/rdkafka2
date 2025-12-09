@@ -85,7 +85,7 @@ impl TryFrom<rd_kafka_consumer_group_state_t> for ConsumerGroupState {
 #[derive(Debug)]
 pub struct ConsumerGroupMemberDescription {
     pub client_id: String,
-    pub group_instance_id: String,
+    pub group_instance_id: Option<String>,
     pub consumer_id: String,
     pub host: String,
 }
@@ -144,17 +144,19 @@ fn build_cg_description(
             let client_id = cstr_to_owned(rd_kafka_MemberDescription_client_id(member));
 
             let group_instance_id =
-                cstr_to_owned(rd_kafka_MemberDescription_group_instance_id(member));
+                cstr_to_owned_option(rd_kafka_MemberDescription_group_instance_id(member));
 
             let consumer_id = cstr_to_owned(rd_kafka_MemberDescription_consumer_id(member));
 
             let host = cstr_to_owned(rd_kafka_MemberDescription_host(member));
 
             let assignment = rd_kafka_MemberDescription_assignment(member);
-            let target_assignment = rd_kafka_MemberDescription_target_assignment(member);
-            // assignments
             let _ass_tpl = rd_kafka_MemberAssignment_partitions(assignment);
-            let _target_ass_tpl = rd_kafka_MemberAssignment_partitions(target_assignment);
+
+            let target_assignment = rd_kafka_MemberDescription_target_assignment(member);
+            if !target_assignment.is_null() {
+                let _target_ass_tpl = rd_kafka_MemberAssignment_partitions(target_assignment);
+            }
 
             members.push(ConsumerGroupMemberDescription {
                 client_id,
