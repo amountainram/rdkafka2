@@ -1,5 +1,8 @@
 use log::trace;
-use rdkafka2_sys::{rd_kafka_AclBinding_destroy, rd_kafka_ConfigResource_destroy};
+use rdkafka2_sys::{
+    rd_kafka_AclBinding_destroy, rd_kafka_ConfigResource_destroy,
+    rd_kafka_topic_partition_list_destroy,
+};
 use std::{
     ffi::c_void,
     marker::PhantomPinned,
@@ -96,7 +99,12 @@ unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_AclBinding_t {
     const DROP: unsafe extern "C" fn(*mut Self) = rd_kafka_AclBinding_destroy;
 }
 
-#[derive(Debug)]
+unsafe impl KafkaDrop for rdkafka2_sys::rd_kafka_topic_partition_list_t {
+    const TYPE: &'static str = "rd_kafka_topic_partition_list_t";
+    const DROP: unsafe extern "C" fn(*mut Self) = rd_kafka_topic_partition_list_destroy;
+}
+
+#[derive(Debug, Clone)]
 #[repr(transparent)]
 pub(crate) struct NativePtr<T>
 where

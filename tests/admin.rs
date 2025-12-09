@@ -252,3 +252,19 @@ async fn acls_crud_ops(config: ClientConfig) {
 
     assert_eq!(deleted, test_topic_acl);
 }
+
+#[rstest]
+#[tokio::test(flavor = "current_thread")]
+async fn absent_consumer_groups(config: ClientConfig) {
+    let admin_client = common::test_admin_client(config);
+
+    let (_, error) = admin_client
+        .describe_consumer_groups(vec!["cg.1"], Default::default())
+        .await
+        .expect("cg description")
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect_err("not coordinator");
+
+    assert_eq!(error, RDKafkaErrorCode::NotCoordinator);
+}

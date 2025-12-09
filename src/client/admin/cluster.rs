@@ -187,7 +187,7 @@ fn build_authorized_operations(
     ops
 }
 
-fn build_cluster_node(native_node: *const rd_kafka_Node_t) -> Node {
+pub(crate) fn build_cluster_node(native_node: *const rd_kafka_Node_t) -> Node {
     unsafe {
         let rack = rdkafka2_sys::rd_kafka_Node_rack(native_node);
         let rack = (!rack.is_null()).then(|| cstr_to_owned(rack));

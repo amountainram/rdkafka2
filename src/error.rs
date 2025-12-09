@@ -69,6 +69,8 @@ pub enum KafkaError {
     JoinError,
     UnknownEvent(i32),
     UnknownResource(i32),
+    UnknownConsumerGroupType(i32),
+    UnknownConsumerGroupState(i32),
     UnknownAclOperation(i32),
     UnknownAclResourcePatternType(i32),
     UnknownAclPermissionType(i32),

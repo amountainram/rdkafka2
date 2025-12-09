@@ -65,6 +65,21 @@ pub(crate) unsafe fn cstr_to_owned(cstr: *const c_char) -> String {
     }
 }
 
+/// Converts a C string into a [`Option<String>`].
+///
+/// # Safety
+///
+/// `cstr` must point to a valid, null-terminated C string.
+pub(crate) unsafe fn cstr_to_owned_option(cstr: *const c_char) -> Option<String> {
+    unsafe {
+        (*cstr != b'\0' as i8).then(|| {
+            CStr::from_ptr(cstr as *const c_char)
+                .to_string_lossy()
+                .into_owned()
+        })
+    }
+}
+
 /// Converts a pointer to an array to an optional slice. If the pointer is null,
 /// returns `None`.
 pub(crate) unsafe fn ptr_to_opt_slice<'a, T>(ptr: *const c_void, size: usize) -> Option<&'a [T]> {
@@ -209,6 +224,34 @@ impl<T> Optional<T> for (T,) {
     }
 }
 
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct CStringArray(Vec<u8>);
+
+impl CStringArray {
+    pub fn as_ptr(&self) -> *const c_char {
+        self.0.as_ptr() as *const _
+    }
+}
+
+impl CStringArray {
+    pub fn from_iter<S>(iter: &[S]) -> Self
+    where
+        S: AsRef<str>,
+    {
+        let size = iter
+            .iter()
+            .fold(0, |size, next| size + next.as_ref().len() + 1);
+        let mut buffer = Vec::with_capacity(size);
+        iter.iter().for_each(|next| {
+            buffer.extend_from_slice(next.as_ref().as_bytes());
+            buffer.push(b'\0');
+        });
+
+        CStringArray(buffer)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,5 +259,26 @@ mod tests {
     #[test]
     fn version() {
         assert_eq!(rdkafka_version(), (34341375, "2.12.1".into()));
+    }
+
+    unsafe fn assert_c_str_array(ptr: *const c_char, str_lens: Vec<usize>, expected: Vec<&[u8]>) {
+        unsafe {
+            let mut cursor = 0;
+            str_lens.iter().enumerate().for_each(|(i, l)| {
+                let bytes = slice::from_raw_parts(ptr.add(cursor) as *const u8, *l);
+                assert_eq!(bytes, expected[i], "Mismatch at segment {i}");
+
+                cursor += l;
+            });
+        }
+    }
+
+    #[test]
+    fn cstr_leak() {
+        let arr = CStringArray::from_iter(&["test", "example"]);
+
+        unsafe {
+            assert_c_str_array(arr.as_ptr(), vec![5, 8], vec![b"test\0", b"example\0"]);
+        }
     }
 }

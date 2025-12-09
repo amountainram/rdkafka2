@@ -6,21 +6,23 @@ use crate::{
     partitions::NewPartitions,
     ptr::{KafkaDrop, NativePtr},
     topic::{DeleteTopic, NewTopic, TopicSettings},
-    util::{ArrayOfResults, ErrBuf, check_rdkafka_invalid_arg},
+    util::{ArrayOfResults, CStringArray, ErrBuf, check_rdkafka_invalid_arg},
 };
 pub use acls::*;
 pub use cluster::*;
+pub use consumer_groups::*;
 use futures::{FutureExt, channel::oneshot, future::BoxFuture};
 use log::{error, info};
 use rdkafka2_sys::{
     RDKafkaErrorCode, RDKafkaEventType, RDKafkaType, rd_kafka_AdminOptions_t, rd_kafka_admin_op_t,
     rd_kafka_event_t, rd_kafka_metadata_t, rd_kafka_queue_t, rd_kafka_t,
 };
-use std::{ffi::c_void, sync::Arc};
+use std::{ffi::c_void, ptr, sync::Arc};
 use topics::TopicResult;
 
 mod acls;
 mod cluster;
+mod consumer_groups;
 mod partitions;
 mod topics;
 
@@ -155,6 +157,7 @@ where
                 RDKafkaEventType::CreateTopicsResult
                 | RDKafkaEventType::DeleteTopicsResult
                 | RDKafkaEventType::CreatePartitionsResult
+                | RDKafkaEventType::DescribeConsumerGroupsResult
                 | RDKafkaEventType::DescribeAclsResult
                 | RDKafkaEventType::CreateAclsResult
                 | RDKafkaEventType::DeleteAclsResult
@@ -507,12 +510,12 @@ impl<C> AdminClient<C> {
         const ALL_TOPICS: i32 = 1;
 
         unsafe {
-            let mut metadata_ptr = std::ptr::null_mut() as *mut rd_kafka_metadata_t;
+            let mut metadata_ptr = ptr::null_mut() as *mut rd_kafka_metadata_t;
             let metadata_ptr_ptr = &mut metadata_ptr as *const *mut rd_kafka_metadata_t;
             let err = rdkafka2_sys::rd_kafka_metadata(
                 self.inner.native_ptr(),
                 ALL_TOPICS,
-                std::ptr::null_mut(),
+                ptr::null_mut(),
                 metadata_ptr_ptr as *mut *const _,
                 timeout.into().as_millis(),
             );
@@ -534,7 +537,7 @@ impl<C> AdminClient<C> {
         const SELECTED_TOPIC: i32 = 0;
 
         unsafe {
-            let mut metadata_ptr = std::ptr::null_mut() as *mut rd_kafka_metadata_t;
+            let mut metadata_ptr = ptr::null_mut() as *mut rd_kafka_metadata_t;
             let metadata_ptr_ptr = &mut metadata_ptr as *const *mut rd_kafka_metadata_t;
 
             let err = rdkafka2_sys::rd_kafka_metadata(
@@ -596,6 +599,40 @@ impl<C> AdminClient<C> {
 
     pub fn partition_available(&self, topic: &Topic, partition: i32) -> bool {
         self.inner.partition_available(topic, partition)
+    }
+
+    pub async fn describe_consumer_groups<I>(
+        &self,
+        groups: I,
+        opts: AdminOptions,
+    ) -> Result<Vec<ConsumerGroupDescriptionResult>>
+    where
+        I: IntoIterator,
+        I::Item: Into<String>,
+    {
+        let client = self.inner.native_ptr();
+        let mut err_buf = ErrBuf::new();
+
+        let (opts, rx) = opts.to_native(
+            rd_kafka_admin_op_t::RD_KAFKA_ADMIN_OP_DESCRIBECONSUMERGROUPS,
+            client,
+            &mut err_buf,
+        )?;
+
+        let groups = groups.into_iter().map(Into::into).collect::<Vec<_>>();
+        let groups_len = groups.len();
+        let groups = CStringArray::from_iter(&groups);
+        unsafe {
+            rdkafka2_sys::rd_kafka_DescribeConsumerGroups(
+                client,
+                ptr::from_ref(&groups.as_ptr()) as *mut _,
+                groups_len,
+                opts.0.ptr(),
+                self.queue.ptr(),
+            );
+        }
+
+        consumer_groups::handle_describe_consumer_groups_result(rx).await
     }
 }
 
